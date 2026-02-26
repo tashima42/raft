@@ -14,9 +14,11 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/tashima42/raft/raft"
 )
 
-var Version string
+var Version = "dev"
 
 // https://github.com/raeperd/kickstart.go/blob/main/main.go
 func main() {
@@ -29,12 +31,19 @@ func main() {
 func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool), version string) error {
 	var port int
 
+	r, err := raft.NewRaft()
+	if err != nil {
+		return errors.New("failed to start raft: " + err.Error())
+	}
+
+	r.AppendToLog(raft.LogRecord{Action: raft.SetAction, Key: "name", Value: "Pedro"})
+
 	portEnv, exists := lookupEnv("PORT")
 	if !exists {
 		return errors.New("failed to find env PORT")
 	}
 
-	port, err := strconv.Atoi(portEnv)
+	port, err = strconv.Atoi(portEnv)
 	if err != nil {
 		return err
 	}
@@ -61,6 +70,10 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		return err
 	case <-ctx.Done():
 		slog.InfoContext(ctx, "shutting down server")
+
+		if err := r.GracefullyShutDown(); err != nil {
+			return errors.New("failed to gracefully shutdown raft: " + err.Error())
+		}
 
 		// Create a new context for shutdown with timeout
 		ctx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
