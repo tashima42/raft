@@ -1,3 +1,4 @@
+// Package raft implements the raft protocol and a keyvalue state machine
 package raft
 
 import "errors"
