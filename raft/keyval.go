@@ -13,7 +13,7 @@ const (
 )
 
 type keyVal struct {
-	Store map[string]string
+	Store map[string]string `json:"store"`
 }
 
 func newKeyVal() keyVal {

@@ -1,32 +1,33 @@
 package raft
 
 import (
-	"encoding/gob"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 type Raft struct {
 	state          *raftState
 	storageFile    *os.File
-	storageEncoder *gob.Encoder
-	storageDecoder *gob.Decoder
+	storageEncoder *json.Encoder
+	storageDecoder *json.Decoder
 	storageMu      *sync.Mutex
+	electionTick   <-chan time.Time
 }
 
 type raftState struct {
-	Store       keyVal
-	CurrentTerm int
-	VotedFor    int
-	Log         []LogRecord
+	KeyVal      keyVal      `json:"store"`
+	CurrentTerm int         `json:"currentTerm"`
+	VotedFor    int         `json:"votedFor"`
+	Log         []LogRecord `json:"logRecord"`
 }
 
 type LogRecord struct {
-	term  int
-	Entry LogEntry
+	Term  int      `json:"term"`
+	Entry LogEntry `json:"entry"`
 }
 
 type LogEntry struct {
@@ -44,18 +45,26 @@ type AppendEntriesRequest struct {
 	LeaderCommit int        `json:"leaderCommit"`
 }
 
+var (
+	minimumElectionTimeoutMS int32 = 300
+	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
+	heartbeatMS              int32 = 100
+)
+
 func NewRaft() (*Raft, error) {
-	f, err := os.OpenFile("store.gob", os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := os.OpenFile("store.json", os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, errors.New("failed to open store file: " + err.Error())
 	}
 
-	encoder := gob.NewEncoder(f)
-	decoder := gob.NewDecoder(f)
+	// encoder := gob.NewEncoder(f)
+	// decoder := gob.NewDecoder(f)
+	encoder := json.NewEncoder(f)
+	decoder := json.NewDecoder(f)
 
 	raft := &Raft{
 		state: &raftState{
-			Store:       newKeyVal(),
+			KeyVal:      newKeyVal(),
 			CurrentTerm: 0,
 			VotedFor:    0,
 			Log:         []LogRecord{},
@@ -64,6 +73,7 @@ func NewRaft() (*Raft, error) {
 		storageEncoder: encoder,
 		storageDecoder: decoder,
 		storageMu:      &sync.Mutex{},
+		electionTick:   nil,
 	}
 
 	if err := raft.restoreState(); err != nil {
@@ -91,8 +101,19 @@ func (r *Raft) saveState() error {
 	r.storageMu.Lock()
 	defer r.storageMu.Unlock()
 
+	if _, err := r.storageFile.Seek(0, io.SeekStart); err != nil {
+		return errors.New("failed to seek the start of the file: " + err.Error())
+	}
+	if err := r.storageFile.Truncate(0); err != nil {
+		return errors.New("failed to truncate file to 0: " + err.Error())
+	}
+
 	if err := r.storageEncoder.Encode(r.state); err != nil {
 		return errors.New("failed to encode state: " + err.Error())
+	}
+
+	if err := r.storageFile.Sync(); err != nil {
+		return errors.New("failed to sync file: " + err.Error())
 	}
 
 	return nil
@@ -113,29 +134,52 @@ func (r *Raft) restoreState() error {
 
 func (r *Raft) initLog() error {
 	for _, record := range r.state.Log {
-		r.state.CurrentTerm = record.term
+		r.state.CurrentTerm = record.Term
 
-		if err := r.state.Store.Exec(record.Entry.Action, record.Entry.Key, record.Entry.Value); err != nil {
+		if err := r.state.KeyVal.Exec(record.Entry.Action, record.Entry.Key, record.Entry.Value); err != nil {
 			return errors.New("failed to exec operation on keyVal store: " + err.Error())
 		}
 	}
 	return nil
 }
 
-func (r *Raft) AppendEntries(req AppendEntriesRequest) error {
-	fmt.Println("appending")
+// AppendEntries receives entries from the leader and checks if they are valid
+// and returns a bool for success or error, the current term and an error
+func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
+	// (§5.1)
+	if req.Term < r.state.CurrentTerm {
+		return false, r.state.CurrentTerm, nil
+	}
+	// (§5.3)
+	if req.PrevLogIndex > len(r.state.Log) {
+		return false, r.state.CurrentTerm, nil
+	}
+	prevLog := r.state.Log[req.PrevLogIndex]
+	if prevLog.Term != req.Term {
+		return false, r.state.CurrentTerm, nil
+	}
+
 	r.state.CurrentTerm = req.Term
 	logRecords := make([]LogRecord, len(req.Entries))
 	for i, entry := range req.Entries {
 		logRecords[i] = LogRecord{
-			term:  req.Term,
+			Term:  req.Term,
 			Entry: entry,
 		}
-		if err := r.state.Store.Exec(entry.Action, entry.Key, entry.Value); err != nil {
-			return errors.New("failed to exec operation on keyVal store: " + err.Error())
+		if err := r.state.KeyVal.Exec(entry.Action, entry.Key, entry.Value); err != nil {
+			return false, r.state.CurrentTerm, errors.New("failed to exec operation on keyVal store: " + err.Error())
 		}
 	}
 	r.state.Log = append(r.state.Log, logRecords...)
 
-	return r.saveState()
+	if err := r.saveState(); err != nil {
+		return false, r.state.CurrentTerm, err
+	}
+	return true, r.state.CurrentTerm, nil
 }
+
+// func (r *Raft) resetElectionTimeout() {
+// 	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
+// 	timeout := int(minimumElectionTimeoutMS) + randTimeout
+// 	r.electionTick = time.NewTimer(time.Duration(timeout) * time.Millisecond).C
+// }
