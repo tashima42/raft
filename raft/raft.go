@@ -3,6 +3,7 @@ package raft
 import (
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -24,14 +25,27 @@ type raftState struct {
 }
 
 type LogRecord struct {
-	term   int
-	Action KeyValAction
-	Key    string
-	Value  string
+	term  int
+	Entry LogEntry
+}
+
+type LogEntry struct {
+	Action KeyValAction `json:"action"`
+	Key    string       `json:"key"`
+	Value  string       `json:"value"`
+}
+
+type AppendEntriesRequest struct {
+	Term         int        `json:"term"`
+	LeaderID     int        `json:"leaderId"`
+	PrevLogIndex int        `json:"prevLogIndex"`
+	PrevLogTerm  int        `json:"prevLogTerm"`
+	Entries      []LogEntry `json:"entries"`
+	LeaderCommit int        `json:"leaderCommit"`
 }
 
 func NewRaft() (*Raft, error) {
-	f, err := os.OpenFile("store.gob", os.O_RDWR|os.O_CREATE, 0644)
+	f, err := os.OpenFile("store.gob", os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, errors.New("failed to open store file: " + err.Error())
 	}
@@ -64,7 +78,7 @@ func NewRaft() (*Raft, error) {
 }
 
 func (r *Raft) GracefullyShutDown() error {
-	if err := r.storeState(); err != nil {
+	if err := r.saveState(); err != nil {
 		return errors.New("failed to store state: " + err.Error())
 	}
 	if err := r.storageFile.Close(); err != nil {
@@ -73,7 +87,7 @@ func (r *Raft) GracefullyShutDown() error {
 	return nil
 }
 
-func (r *Raft) storeState() error {
+func (r *Raft) saveState() error {
 	r.storageMu.Lock()
 	defer r.storageMu.Unlock()
 
@@ -101,14 +115,27 @@ func (r *Raft) initLog() error {
 	for _, record := range r.state.Log {
 		r.state.CurrentTerm = record.term
 
-		if err := r.state.Store.Exec(record.Action, record.Key, record.Value); err != nil {
+		if err := r.state.Store.Exec(record.Entry.Action, record.Entry.Key, record.Entry.Value); err != nil {
 			return errors.New("failed to exec operation on keyVal store: " + err.Error())
 		}
 	}
 	return nil
 }
 
-func (r *Raft) AppendToLog(record LogRecord) {
-	record.term = r.state.CurrentTerm
-	r.state.Log = append(r.state.Log, record)
+func (r *Raft) AppendEntries(req AppendEntriesRequest) error {
+	fmt.Println("appending")
+	r.state.CurrentTerm = req.Term
+	logRecords := make([]LogRecord, len(req.Entries))
+	for i, entry := range req.Entries {
+		logRecords[i] = LogRecord{
+			term:  req.Term,
+			Entry: entry,
+		}
+		if err := r.state.Store.Exec(entry.Action, entry.Key, entry.Value); err != nil {
+			return errors.New("failed to exec operation on keyVal store: " + err.Error())
+		}
+	}
+	r.state.Log = append(r.state.Log, logRecords...)
+
+	return r.saveState()
 }

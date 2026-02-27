@@ -36,11 +36,9 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
-	r.AppendToLog(raft.LogRecord{Action: raft.SetAction, Key: "name", Value: "Pedro"})
-
 	portEnv, exists := lookupEnv("PORT")
 	if !exists {
-		return errors.New("failed to find env PORT")
+		portEnv = "6437"
 	}
 
 	port, err = strconv.Atoi(portEnv)
@@ -53,7 +51,7 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(w, nil)))
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
-		Handler:           route(slog.Default(), version),
+		Handler:           route(slog.Default(), version, r),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -93,12 +91,10 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 // route sets up and returns an [http.Handler] for all the server routes.
 // It is the single source of truth for all the routes.
 // You can add custom [http.Handler] as needed.
-func route(log *slog.Logger, version string) http.Handler {
+func route(log *slog.Logger, version string, r *raft.Raft) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", handleGetHealth(version))
-	// mux.HandleFunc("PUT /register/all", handleRegisterIPAll(pangolinClient))
-	// mux.HandleFunc("PUT /register/{id}", handleRegisterIP(pangolinClient))
-	// mux.HandleFunc("GET /", handleHomePage(pangolinClient))
+	mux.HandleFunc("PUT /entries", handleAppendEntries(r))
 
 	handler := accesslog(mux, log)
 	handler = recovery(handler, log)
@@ -190,7 +186,7 @@ func (re *responseRecorder) WriteHeader(statusCode int) {
 }
 
 // https://grafana.com/blog/2024/02/09/how-i-write-http-services-in-go-after-13-years
-func encode[T any](w http.ResponseWriter, r *http.Request, status int, v T) error {
+func encode[T any](w http.ResponseWriter, _ *http.Request, status int, v T) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
