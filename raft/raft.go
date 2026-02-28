@@ -4,17 +4,27 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"os"
 	"sync"
 	"time"
 )
 
+type RaftState int
+
+const (
+	StateLeader = iota
+	StateFollower
+	StateCandidate
+)
+
 type Raft struct {
-	state          *raftState
+	state          RaftState
+	stableState    *raftState
 	storageFile    *os.File
 	storageEncoder *json.Encoder
 	storageDecoder *json.Decoder
-	storageMu      *sync.Mutex
+	mu             *sync.Mutex
 	electionTick   <-chan time.Time
 }
 
@@ -63,7 +73,7 @@ func NewRaft() (*Raft, error) {
 	decoder := json.NewDecoder(f)
 
 	raft := &Raft{
-		state: &raftState{
+		stableState: &raftState{
 			KeyVal:      newKeyVal(),
 			CurrentTerm: 0,
 			VotedFor:    0,
@@ -72,7 +82,7 @@ func NewRaft() (*Raft, error) {
 		storageFile:    f,
 		storageEncoder: encoder,
 		storageDecoder: decoder,
-		storageMu:      &sync.Mutex{},
+		mu:             &sync.Mutex{},
 		electionTick:   nil,
 	}
 
@@ -98,8 +108,8 @@ func (r *Raft) GracefullyShutDown() error {
 }
 
 func (r *Raft) saveState() error {
-	r.storageMu.Lock()
-	defer r.storageMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if _, err := r.storageFile.Seek(0, io.SeekStart); err != nil {
 		return errors.New("failed to seek the start of the file: " + err.Error())
@@ -108,7 +118,7 @@ func (r *Raft) saveState() error {
 		return errors.New("failed to truncate file to 0: " + err.Error())
 	}
 
-	if err := r.storageEncoder.Encode(r.state); err != nil {
+	if err := r.storageEncoder.Encode(r.stableState); err != nil {
 		return errors.New("failed to encode state: " + err.Error())
 	}
 
@@ -120,10 +130,10 @@ func (r *Raft) saveState() error {
 }
 
 func (r *Raft) restoreState() error {
-	r.storageMu.Lock()
-	defer r.storageMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if err := r.storageDecoder.Decode(r.state); err != nil {
+	if err := r.storageDecoder.Decode(r.stableState); err != nil {
 		if err != io.EOF {
 			return errors.New("failed to decode state: " + err.Error())
 		}
@@ -133,10 +143,10 @@ func (r *Raft) restoreState() error {
 }
 
 func (r *Raft) initLog() error {
-	for _, record := range r.state.Log {
-		r.state.CurrentTerm = record.Term
+	for _, record := range r.stableState.Log {
+		r.stableState.CurrentTerm = record.Term
 
-		if err := r.state.KeyVal.Exec(record.Entry.Action, record.Entry.Key, record.Entry.Value); err != nil {
+		if err := r.stableState.KeyVal.Exec(record.Entry.Action, record.Entry.Key, record.Entry.Value); err != nil {
 			return errors.New("failed to exec operation on keyVal store: " + err.Error())
 		}
 	}
@@ -147,39 +157,45 @@ func (r *Raft) initLog() error {
 // and returns a bool for success or error, the current term and an error
 func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	// (§5.1)
-	if req.Term < r.state.CurrentTerm {
-		return false, r.state.CurrentTerm, nil
+	if req.Term < r.stableState.CurrentTerm {
+		return false, r.stableState.CurrentTerm, nil
 	}
 	// (§5.3)
-	if req.PrevLogIndex > len(r.state.Log) {
-		return false, r.state.CurrentTerm, nil
+	if req.PrevLogIndex > len(r.stableState.Log) {
+		return false, r.stableState.CurrentTerm, nil
 	}
-	prevLog := r.state.Log[req.PrevLogIndex]
+	prevLog := r.stableState.Log[req.PrevLogIndex]
 	if prevLog.Term != req.Term {
-		return false, r.state.CurrentTerm, nil
+		return false, r.stableState.CurrentTerm, nil
 	}
 
-	r.state.CurrentTerm = req.Term
+	r.stableState.CurrentTerm = req.Term
 	logRecords := make([]LogRecord, len(req.Entries))
 	for i, entry := range req.Entries {
 		logRecords[i] = LogRecord{
 			Term:  req.Term,
 			Entry: entry,
 		}
-		if err := r.state.KeyVal.Exec(entry.Action, entry.Key, entry.Value); err != nil {
-			return false, r.state.CurrentTerm, errors.New("failed to exec operation on keyVal store: " + err.Error())
+		if err := r.stableState.KeyVal.Exec(entry.Action, entry.Key, entry.Value); err != nil {
+			return false, r.stableState.CurrentTerm, errors.New("failed to exec operation on keyVal store: " + err.Error())
 		}
 	}
-	r.state.Log = append(r.state.Log, logRecords...)
+	r.stableState.Log = append(r.stableState.Log, logRecords...)
 
 	if err := r.saveState(); err != nil {
-		return false, r.state.CurrentTerm, err
+		return false, r.stableState.CurrentTerm, err
 	}
-	return true, r.state.CurrentTerm, nil
+	return true, r.stableState.CurrentTerm, nil
 }
 
-// func (r *Raft) resetElectionTimeout() {
-// 	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
-// 	timeout := int(minimumElectionTimeoutMS) + randTimeout
-// 	r.electionTick = time.NewTimer(time.Duration(timeout) * time.Millisecond).C
-// }
+func (r *Raft) Run() {
+	for range r.electionTick {
+		// convert to candidate
+	}
+}
+
+func (r *Raft) resetElectionTimeout() {
+	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
+	timeout := int(minimumElectionTimeoutMS) + randTimeout
+	r.electionTick = time.NewTimer(time.Duration(timeout) * time.Millisecond).C
+}

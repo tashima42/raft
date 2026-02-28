@@ -41,13 +41,13 @@ func handleAppendEntries(r *raft.Raft) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		if err := r.AppendEntries(appendEntriesReq); err != nil {
+		success, term, err := r.AppendEntries(appendEntriesReq)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		res := responseBody{Term: 0, Success: true}
+		res := responseBody{Term: term, Success: success}
 
 		if err := encode(w, nil, http.StatusOK, res); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
