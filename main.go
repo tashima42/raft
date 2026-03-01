@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tashima42/raft/database"
 	"github.com/tashima42/raft/raft"
 )
 
@@ -30,20 +31,29 @@ func main() {
 
 func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool), version string) error {
 	var port int
-
-	r, err := raft.NewRaft()
-	if err != nil {
-		return errors.New("failed to start raft: " + err.Error())
-	}
-
 	portEnv, exists := lookupEnv("PORT")
 	if !exists {
 		portEnv = "6437"
 	}
 
-	port, err = strconv.Atoi(portEnv)
+	dbLocation, exists := lookupEnv("DB_LOCATION")
+	if !exists {
+		dbLocation = "./raft.db"
+	}
+
+	port, err := strconv.Atoi(portEnv)
 	if err != nil {
 		return err
+	}
+
+	db, err := database.NewDatabase(dbLocation)
+	if err != nil {
+		return errors.New("failed to start raft: " + err.Error())
+	}
+
+	r, err := raft.NewRaft(db)
+	if err != nil {
+		return errors.New("failed to start raft: " + err.Error())
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
