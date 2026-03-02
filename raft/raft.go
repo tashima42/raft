@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -36,11 +37,11 @@ type AppendEntriesRequest struct {
 	LeaderCommit int                 `json:"leaderCommit"`
 }
 
-// var (
-// 	minimumElectionTimeoutMS int32 = 300
-// 	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
-// 	heartbeatMS              int32 = 100
-// )
+var (
+	minimumElectionTimeoutMS int32 = 300
+	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
+	// heartbeatMS              int32 = 100
+)
 
 func NewRaft(db *database.Database) (*Raft, error) {
 	raft := &Raft{
@@ -48,6 +49,8 @@ func NewRaft(db *database.Database) (*Raft, error) {
 		mu:           &sync.Mutex{},
 		electionTick: nil,
 	}
+
+	raft.resetElectionTimeout()
 
 	err := raft.setCurrentTerm(0)
 
@@ -127,8 +130,8 @@ func (r *Raft) Run() {
 	}
 }
 
-// func (r *Raft) resetElectionTimeout() {
-// 	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
-// 	timeout := int(minimumElectionTimeoutMS) + randTimeout
-// 	r.electionTick = time.NewTimer(time.Duration(timeout) * time.Millisecond).C
-// }
+func (r *Raft) resetElectionTimeout() {
+	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
+	timeout := int(minimumElectionTimeoutMS) + randTimeout
+	r.electionTick = time.NewTimer(time.Duration(timeout) * time.Millisecond).C
+}
