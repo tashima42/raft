@@ -21,14 +21,27 @@ const (
 	StateCandidate
 )
 
+func (s RaftState) String() string {
+	switch s {
+	case StateLeader:
+		return "leader"
+	case StateFollower:
+		return "follower"
+	case StateCandidate:
+		return "candidate"
+	}
+	return ""
+}
+
 type Raft struct {
 	id           int
 	peers        []Peer
-	db           *database.Database
+	db           database.Database
+	Client       Client
 	mu           *sync.Mutex
 	electionTick <-chan time.Time
 	KeyVal       keyVal
-	state        RaftState
+	State        RaftState
 	ctx          context.Context
 }
 
@@ -37,31 +50,23 @@ type Peer struct {
 	Address string
 }
 
-type AppendEntriesRequest struct {
-	Term         int                 `json:"term"`
-	LeaderID     int                 `json:"leaderId"`
-	PrevLogIndex int                 `json:"prevLogIndex"`
-	PrevLogTerm  int                 `json:"prevLogTerm"`
-	Entries      []database.LogEntry `json:"entries,omitempty"`
-	LeaderCommit int                 `json:"leaderCommit"`
-}
-
 var (
 	minimumElectionTimeoutMS int32 = 300
 	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
 	// heartbeatMS              int32 = 100
 )
 
-func NewRaft(ctx context.Context, db *database.Database, id int, peers []Peer) (*Raft, error) {
+func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []Peer) (*Raft, error) {
 	raft := &Raft{
 		ctx:          ctx,
 		id:           id,
 		peers:        peers,
 		db:           db,
+		Client:       client,
 		mu:           &sync.Mutex{},
 		electionTick: nil,
 		KeyVal:       newKeyVal(),
-		state:        StateFollower,
+		State:        StateFollower,
 	}
 
 	raft.resetElectionTimeout()
@@ -142,7 +147,7 @@ func (r *Raft) Run() {
 	slog.InfoContext(r.ctx, "running raft")
 	go r.electionTimer()
 	for {
-		if r.state == StateCandidate {
+		if r.State == StateCandidate {
 			slog.InfoContext(r.ctx, "candidate state identified")
 			slog.InfoContext(r.ctx, "locking mutex")
 			r.mu.Lock()
@@ -172,6 +177,11 @@ func (r *Raft) Run() {
 	}
 }
 
+func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
+	log.Fatal("not implemented yet")
+	return -1, false, nil
+}
+
 func (r *Raft) requestVotes() {
 	for _, peer := range r.peers {
 		slog.InfoContext(r.ctx, "requesting vote from: "+peer.Address)
@@ -179,10 +189,12 @@ func (r *Raft) requestVotes() {
 }
 
 func (r *Raft) resetElectionTimeout() {
+	r.mu.Lock()
+	slog.InfoContext(r.ctx, "resetting election timeout")
 	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
 	timeout := int(minimumElectionTimeoutMS) + randTimeout
-	r.electionTick = time.NewTimer(time.Duration(timeout) * time.Millisecond).C
-	slog.InfoContext(r.ctx, fmt.Sprintf("election timeout set to: %d", timeout))
+	r.setElectionTimeout(time.Duration(timeout))
+	r.mu.Unlock()
 }
 
 func (r *Raft) electionTimer() {
@@ -192,7 +204,12 @@ func (r *Raft) electionTimer() {
 		slog.InfoContext(r.ctx, "election tick received, locking mutex")
 		r.mu.Lock()
 		slog.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
-		r.state = StateCandidate
+		r.State = StateCandidate
 		r.mu.Unlock()
 	}
+}
+
+func (r *Raft) setElectionTimeout(timeout time.Duration) {
+	slog.InfoContext(r.ctx, fmt.Sprintf("setting election timeout to: %d", timeout))
+	r.electionTick = time.NewTimer(timeout * time.Millisecond).C
 }

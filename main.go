@@ -55,13 +55,14 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		return err
 	}
 
-	db, err := database.NewDatabase(dbLocation)
+	db, err := database.NewSQLite(dbLocation)
 	if err != nil {
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
 	peers := []raft.Peer{{ID: 2, Address: "127.0.0.1:6438"}, {ID: 3, Address: "127.0.0.1:6439"}}
-	r, err := raft.NewRaft(ctx, db, raftID, peers)
+	// TODO: use real client
+	r, err := raft.NewRaft(ctx, db, raft.NewMockClient(nil), raftID, peers)
 	if err != nil {
 		return errors.New("failed to start raft: " + err.Error())
 	}
