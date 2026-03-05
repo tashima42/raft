@@ -30,10 +30,19 @@ func main() {
 }
 
 func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool), version string) error {
-	var port int
 	portEnv, exists := lookupEnv("PORT")
 	if !exists {
 		portEnv = "6437"
+	}
+
+	raftIDEnv, exists := lookupEnv("RAFT_ID")
+	if !exists {
+		raftIDEnv = "1"
+	}
+
+	raftID, err := strconv.Atoi(raftIDEnv)
+	if err != nil {
+		return err
 	}
 
 	dbLocation, exists := lookupEnv("DB_LOCATION")
@@ -51,10 +60,13 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
-	r, err := raft.NewRaft(db)
+	peers := []raft.Peer{{ID: 2, Address: "127.0.0.1:6438"}, {ID: 3, Address: "127.0.0.1:6439"}}
+	r, err := raft.NewRaft(ctx, db, raftID, peers)
 	if err != nil {
 		return errors.New("failed to start raft: " + err.Error())
 	}
+
+	go r.Run()
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
@@ -105,6 +117,7 @@ func route(log *slog.Logger, version string, r *raft.Raft) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", handleGetHealth(version))
 	mux.HandleFunc("PUT /entries", handleAppendEntries(r))
+	mux.HandleFunc("GET /key/{key}", handleGetKeyValue(r))
 
 	handler := accesslog(mux, log)
 	handler = recovery(handler, log)

@@ -38,16 +38,39 @@ func handleAppendEntries(r *raft.Raft) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		appendEntriesReq, err := decode[raft.AppendEntriesRequest](req)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to decode req: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		success, term, err := r.AppendEntries(appendEntriesReq)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to append entries: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		res := responseBody{Term: term, Success: success}
+
+		if err := encode(w, nil, http.StatusOK, res); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func handleGetKeyValue(r *raft.Raft) http.HandlerFunc {
+	type responseBody struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	return func(w http.ResponseWriter, req *http.Request) {
+		key := req.PathValue("key")
+
+		value := r.KeyVal.Get(key)
+		if value == "" {
+			http.Error(w, "key not found", http.StatusNotFound)
+			return
+		}
+
+		res := responseBody{Key: key, Value: value}
 
 		if err := encode(w, nil, http.StatusOK, res); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

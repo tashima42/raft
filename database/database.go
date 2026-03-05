@@ -124,6 +124,39 @@ func (d *Database) AppendLogs(logs []LogEntry) (err error) {
 	return err
 }
 
+func (d *Database) GetLogs() (logs []LogEntry, err error) {
+	rows, err := d.db.Query("SELECT action, term, key, value FROM logs;")
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		log := LogEntry{}
+		err = rows.Scan(&log.Action, &log.Term, &log.Key, &log.Value)
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, log)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if closeErr := errors.Join(rows.Close()); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+
+	return logs, err
+}
+
+func (d *Database) CountLogs() (logCount int, err error) {
+	err = d.db.QueryRow("SELECT COUNT(*) FROM logs").Scan(&logCount)
+	return logCount, err
+}
+
 func (d *Database) Close() error {
 	return d.db.Close()
 }
