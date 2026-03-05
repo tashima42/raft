@@ -12,5 +12,8 @@ build-debug:
 build: download
 	go build -o $(TARGET) -ldflags '-w -X main.Version=$(VERSION)' .
 
+test:
+	go test -v -race ./...
+
 watch:
 	air
