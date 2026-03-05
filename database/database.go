@@ -46,14 +46,14 @@ func (d *Database) migrate() error {
 		`CREATE TABLE IF NOT EXISTS 'raft' (
 			id INTEGER NOT NULL PRIMARY KEY,
 			key TEXT NOT NULL UNIQUE,
-			VALUE TEXT NOT NULL
+			value TEXT NOT NULL
 		);`,
 		`CREATE TABLE IF NOT EXISTS 'logs' (
 			id INTEGER NOT NULL PRIMARY KEY,
 			action TEXT NOT NULL,
 			term INTEGER NOT NULL,
 			key TEXT NOT NULL,
-			VALUE TEXT NOT NULL,
+			value TEXT NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
 	}
@@ -88,6 +88,9 @@ func (d *Database) GetRaftValue(key string) (string, error) {
 }
 
 func (d *Database) AppendLogs(logs []LogEntry) (err error) {
+	if len(logs) < 1 {
+		return nil
+	}
 	var sb strings.Builder
 	args := []any{}
 
