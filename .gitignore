@@ -4,3 +4,4 @@ dist/
 *.gob
 *.json
 *.db
+*.db-journal
