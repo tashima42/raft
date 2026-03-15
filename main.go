@@ -135,9 +135,6 @@ func parseFlags() ([]int, []string, error) {
 		return nil, nil, errors.New("empty peers addresses")
 	}
 
-	fmt.Printf("peersIDs: %s\n", *peersIDsStr)
-	fmt.Printf("peersAddressesStr: %s\n", *peersAddressesStr)
-
 	pis := strings.Split(*peersIDsStr, ",")
 	ads := strings.Split(*peersAddressesStr, ",")
 
