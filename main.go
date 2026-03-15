@@ -126,14 +126,17 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 func parseFlags() ([]int, []string, error) {
 	peersIDsStr := flag.String("peers-ids", "", "comma separated ids. E.g: 1,2,3")
 	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: http://localhost:6438,http://localhost:6439")
+	flag.Parse()
 
 	if peersIDsStr == nil {
 		return nil, nil, errors.New("empty peers ids")
 	}
-
 	if peersAddressesStr == nil {
 		return nil, nil, errors.New("empty peers addresses")
 	}
+
+	fmt.Printf("peersIDs: %s\n", *peersIDsStr)
+	fmt.Printf("peersAddressesStr: %s\n", *peersAddressesStr)
 
 	pis := strings.Split(*peersIDsStr, ",")
 	ads := strings.Split(*peersAddressesStr, ",")
