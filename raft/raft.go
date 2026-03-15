@@ -34,15 +34,16 @@ func (s RaftState) String() string {
 }
 
 type Raft struct {
-	id           int
-	peers        []Peer
-	db           database.Database
-	Client       Client
-	mu           *sync.Mutex
-	electionTick <-chan time.Time
-	KeyVal       keyVal
-	State        RaftState
-	ctx          context.Context
+	id            int
+	peers         []Peer
+	db            database.Database
+	Client        Client
+	mu            *sync.Mutex
+	electionTick  <-chan time.Time
+	heartBeatTick <-chan time.Time
+	KeyVal        keyVal
+	State         RaftState
+	ctx           context.Context
 }
 
 type Peer struct {
@@ -54,7 +55,7 @@ type Peer struct {
 var (
 	minimumElectionTimeoutMS int32 = 3000
 	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
-	// heartbeatMS              int32 = 100
+	heartbeatMS              int32 = 100
 )
 
 func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []Peer) (*Raft, error) {
@@ -71,6 +72,7 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 	}
 
 	raft.resetElectionTimeout()
+	raft.setHeartBeatTimeout(time.Duration(heartbeatMS))
 
 	if err := raft.setCurrentTerm(0); err != nil {
 		return nil, err
@@ -112,6 +114,9 @@ func (r *Raft) initLog() error {
 // AppendEntries receives entries from the leader and checks if they are valid
 // and returns a bool for success or error, the current term and an error
 func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
+	// reset election timeout and prevent server from starting new elections
+	r.resetElectionTimeout()
+
 	currentTerm, err := r.currentTerm()
 	if err != nil {
 		return false, currentTerm, errors.New("failed to get current term: " + err.Error())
@@ -153,12 +158,30 @@ func (r *Raft) Run() {
 	slog.InfoContext(r.ctx, "running raft")
 	go r.electionTimer()
 	for {
-		if r.State == StateCandidate {
+		switch r.State {
+		case StateCandidate:
 			if err := r.candidateState(); err != nil {
+				log.Fatal(err.Error())
+			}
+		case StateLeader:
+			if err := r.leaderState(); err != nil {
 				log.Fatal(err.Error())
 			}
 		}
 	}
+}
+
+func (r *Raft) leaderState() error {
+	for range r.heartBeatTick {
+		if r.State != StateLeader {
+			return nil
+		}
+		if err := r.sendHeartBeats(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (r *Raft) candidateState() error {
@@ -187,6 +210,35 @@ func (r *Raft) candidateState() error {
 	if err := r.requestVotes(); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (r *Raft) sendHeartBeats() error {
+	// TODO: only send heartbeats when there are no other append entries requests
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	currentTerm, err := r.currentTerm()
+	if err != nil {
+		return errors.New("failed to get current term: " + err.Error())
+	}
+	for _, peer := range r.peers {
+		// TODO: implement log index
+		success, term, err := r.Client.AppendEntries(peer, AppendEntriesRequest{Term: currentTerm, LeaderID: r.id, PrevLogIndex: -1, PrevLogTerm: -1, Entries: []database.LogEntry{}, LeaderCommit: -1})
+		if err != nil {
+			return err
+		}
+		if !success {
+			slog.InfoContext(r.ctx, fmt.Sprintf("failed to contact peer: %d", peer.ID))
+			// TODO: implement retries
+		}
+		if term > currentTerm {
+			r.State = StateFollower
+			return nil
+		}
+	}
+
 	return nil
 }
 
@@ -309,4 +361,9 @@ func (r *Raft) electionTimer() {
 func (r *Raft) setElectionTimeout(timeout time.Duration) {
 	slog.InfoContext(r.ctx, fmt.Sprintf("setting election timeout to: %d", timeout))
 	r.electionTick = time.NewTimer(timeout * time.Millisecond).C
+}
+
+func (r *Raft) setHeartBeatTimeout(timeout time.Duration) {
+	slog.InfoContext(r.ctx, fmt.Sprintf("setting heartbeat timeout to: %d", timeout))
+	r.heartBeatTick = time.NewTimer(timeout * time.Millisecond).C
 }
