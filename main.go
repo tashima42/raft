@@ -33,27 +33,12 @@ func main() {
 }
 
 func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool), version string) error {
-	portEnv, exists := lookupEnv("PORT")
-	if !exists {
-		portEnv = "6437"
-	}
-
-	raftIDEnv, exists := lookupEnv("RAFT_ID")
-	if !exists {
-		raftIDEnv = "1"
-	}
-
-	raftID, err := strconv.Atoi(raftIDEnv)
-	if err != nil {
-		return err
-	}
-
 	dbLocation, exists := lookupEnv("DB_LOCATION")
 	if !exists {
 		dbLocation = "./raft.db"
 	}
 
-	peersIDs, peersAddresses, err := parseFlags()
+	peersIDs, peersAddresses, port, id, err := parseFlags()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
@@ -64,22 +49,17 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		peers[i] = raft.Peer{ID: id, Address: peersAddresses[i]}
 	}
 
-	port, err := strconv.Atoi(portEnv)
-	if err != nil {
-		return err
-	}
-
 	db, err := database.NewSQLite(dbLocation)
 	if err != nil {
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
-	r, err := raft.NewRaft(ctx, db, raft.NewHTTPClient(http.Client{Timeout: time.Second * 10}), raftID, peers)
+	r, err := raft.NewRaft(ctx, db, raft.NewHTTPClient(http.Client{Timeout: time.Second * 10}), id, peers)
 	if err != nil {
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
-	// go r.Run()
+	go r.Run()
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
@@ -123,23 +103,32 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 	}
 }
 
-func parseFlags() ([]int, []string, error) {
+// parseFlags returns peersIDs, peersAddresses, port, id, error
+func parseFlags() ([]int, []string, int, int, error) {
+	port := flag.Int("port", 6437, "port to run http server on")
+	sid := flag.Int("id", 1, "raft server id")
 	peersIDsStr := flag.String("peers-ids", "", "comma separated ids. E.g: 1,2,3")
 	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: http://localhost:6438,http://localhost:6439")
 	flag.Parse()
 
+	if port == nil {
+		return nil, nil, -1, -1, errors.New("empty port")
+	}
+	if sid == nil {
+		return nil, nil, -1, -1, errors.New("empty id")
+	}
 	if peersIDsStr == nil {
-		return nil, nil, errors.New("empty peers ids")
+		return nil, nil, -1, -1, errors.New("empty peers ids")
 	}
 	if peersAddressesStr == nil {
-		return nil, nil, errors.New("empty peers addresses")
+		return nil, nil, -1, -1, errors.New("empty peers addresses")
 	}
 
 	pis := strings.Split(*peersIDsStr, ",")
 	ads := strings.Split(*peersAddressesStr, ",")
 
 	if len(pis) != len(ads) {
-		return nil, nil, errors.New("peers ids and perrs addresses have different lengths")
+		return nil, nil, -1, -1, errors.New("peers ids and perrs addresses have different lengths")
 	}
 
 	ids := make([]int, len(pis))
@@ -147,12 +136,12 @@ func parseFlags() ([]int, []string, error) {
 	for i, pid := range pis {
 		id, err := strconv.Atoi(pid)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, -1, -1, err
 		}
 		ids[i] = id
 	}
 
-	return ids, ads, nil
+	return ids, ads, *port, *sid, nil
 }
 
 // route sets up and returns an [http.Handler] for all the server routes.
