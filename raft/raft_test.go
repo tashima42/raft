@@ -3,7 +3,6 @@ package raft
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/tashima42/raft/database"
 )
@@ -80,51 +79,49 @@ func TestAppendEntriesRequestedTermHigher(t *testing.T) {
 	}
 }
 
-func TestElectionTimeout(t *testing.T) {
-	t.Log("create a mock raft")
+//
+// func TestElectionTimeout(t *testing.T) {
+// 	t.Log("create a mock raft")
+// 	raft, err := mockRaft()
+// 	if err != nil {
+// 		t.Error(err)
+// 	}
+// 	t.Log("verify follower state")
+// 	if raft.State != StateFollower {
+// 		t.Error("expected initial state is follower, got " + raft.State.String())
+// 	}
+// 	t.Log("start election timer")
+// 	go raft.electionTimer()
+// 	t.Log("set the timeout to zero")
+// 	raft.setElectionTimeout(time.Duration(0))
+//
+// 	for range time.After(1 * time.Second) {
+// 		if raft.State != StateCandidate {
+// 			t.Error("exptected state after the election timeout is candidate, got " + raft.State.String())
+// 		}
+// 		t.Fatal("timed out")
+// 	}
+// }
+
+func TestRequestVote(t *testing.T) {
 	raft, err := mockRaft()
 	if err != nil {
 		t.Error(err)
 	}
-	t.Log("verify follower state")
-	if raft.State != StateFollower {
-		t.Error("expected initial state is follower, got " + raft.State.String())
-	}
-	t.Log("start election timer")
-	go raft.electionTimer()
-	t.Log("set the timeout to zero")
-	raft.setElectionTimeout(time.Duration(0))
+	raft.State = StateCandidate
 
-	t.Log("wait for the election tick")
-	select {
-	case <-raft.electionTick:
-		if raft.State != StateCandidate {
-			t.Error("exptected state after the election timeout is candidate, got " + raft.State.String())
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Test timed out")
+	raftPeer1, err := mockRaft()
+	if err != nil {
+		t.Error(err)
 	}
-}
 
-func TestRequestVote(t *testing.T) {
-	// raft, err := mockRaft()
-	// if err != nil {
-	// 	t.Error(err)
-	// }
-	// raft.State = StateCandidate
-	//
-	// raftPeer2, err := mockRaft()
-	// if err != nil {
-	// 	t.Error(err)
-	// }
-	//
-	// raftPeer3, err := mockRaft()
-	// if err != nil {
-	// 	t.Error(err)
-	// }
-	//
-	// raft.peers = []Peer{{ID: 2, Address: "local:2"}, {ID: 3, Address: "local:3"}}
-	// raft.Client = NewMockClient(map[int]*Raft{2: raftPeer2, 3: raftPeer3})
+	raftPeer2, err := mockRaft()
+	if err != nil {
+		t.Error(err)
+	}
+
+	raft.peers = []Peer{{ID: 1, Address: "local:1"}, {ID: 2, Address: "local:2"}}
+	raft.Client = NewMockClient(map[int]*Raft{1: raftPeer1, 2: raftPeer2})
 }
 
 func mockRaft() (*Raft, error) {

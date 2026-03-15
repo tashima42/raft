@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,6 +53,17 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		dbLocation = "./raft.db"
 	}
 
+	peersIDs, peersAddresses, err := parseFlags()
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	peers := make([]raft.Peer, len(peersIDs))
+
+	for i, id := range peersIDs {
+		peers[i] = raft.Peer{ID: id, Address: peersAddresses[i]}
+	}
+
 	port, err := strconv.Atoi(portEnv)
 	if err != nil {
 		return err
@@ -60,14 +74,12 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
-	peers := []raft.Peer{{ID: 2, Address: "127.0.0.1:6438"}, {ID: 3, Address: "127.0.0.1:6439"}}
-	// TODO: use real client
-	r, err := raft.NewRaft(ctx, db, raft.NewMockClient(nil), raftID, peers)
+	r, err := raft.NewRaft(ctx, db, raft.NewHTTPClient(http.Client{Timeout: time.Second * 10}), raftID, peers)
 	if err != nil {
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
-	go r.Run()
+	// go r.Run()
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
@@ -111,13 +123,46 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 	}
 }
 
+func parseFlags() ([]int, []string, error) {
+	peersIDsStr := flag.String("peers-ids", "", "comma separated ids. E.g: 1,2,3")
+	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: http://localhost:6438,http://localhost:6439")
+
+	if peersIDsStr == nil {
+		return nil, nil, errors.New("empty peers ids")
+	}
+
+	if peersAddressesStr == nil {
+		return nil, nil, errors.New("empty peers addresses")
+	}
+
+	pis := strings.Split(*peersIDsStr, ",")
+	ads := strings.Split(*peersAddressesStr, ",")
+
+	if len(pis) != len(ads) {
+		return nil, nil, errors.New("peers ids and perrs addresses have different lengths")
+	}
+
+	ids := make([]int, len(pis))
+
+	for i, pid := range pis {
+		id, err := strconv.Atoi(pid)
+		if err != nil {
+			return nil, nil, err
+		}
+		ids[i] = id
+	}
+
+	return ids, ads, nil
+}
+
 // route sets up and returns an [http.Handler] for all the server routes.
 // It is the single source of truth for all the routes.
 // You can add custom [http.Handler] as needed.
 func route(log *slog.Logger, version string, r *raft.Raft) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", handleGetHealth(version))
-	mux.HandleFunc("PUT /entries", handleAppendEntries(r))
+	mux.HandleFunc("POST /entries", handleAppendEntries(r))
+	mux.HandleFunc("POST /request-vote", handleRequestVote(r))
 	mux.HandleFunc("GET /key/{key}", handleGetKeyValue(r))
 
 	handler := accesslog(mux, log)

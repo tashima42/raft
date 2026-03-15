@@ -71,13 +71,18 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 
 	raft.resetElectionTimeout()
 
-	err := raft.setCurrentTerm(0)
+	if err := raft.setCurrentTerm(0); err != nil {
+		return nil, err
+	}
+	if err := raft.setVotedFor(-1); err != nil {
+		return nil, err
+	}
 
 	if err := raft.initLog(); err != nil {
 		return nil, errors.New("failed to init and apply log: " + err.Error())
 	}
 
-	return raft, err
+	return raft, nil
 }
 
 func (r *Raft) GracefullyShutDown() error {
@@ -148,38 +153,69 @@ func (r *Raft) Run() {
 	go r.electionTimer()
 	for {
 		if r.State == StateCandidate {
-			slog.InfoContext(r.ctx, "candidate state identified")
-			slog.InfoContext(r.ctx, "locking mutex")
-			r.mu.Lock()
-			currentTerm, err := r.currentTerm()
-			if err != nil {
-				log.Fatal("failed to get current term: " + err.Error())
-			}
-			currentTerm += 1
-			slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
-			if err := r.setCurrentTerm(currentTerm); err != nil {
-				log.Fatal("failed to set current term: " + err.Error())
-			}
-
-			slog.InfoContext(r.ctx, "voting for itself")
-			if err := r.setVotedFor(r.id); err != nil {
-				log.Fatal("failed to vote for self: " + err.Error())
-			}
-
-			slog.InfoContext(r.ctx, "reseting election timeout")
-			r.resetElectionTimeout()
-			slog.InfoContext(r.ctx, "requesting votes")
-			r.requestVotes()
-
-			slog.InfoContext(r.ctx, "unlocking mutex")
-			r.mu.Unlock()
+			r.candidateState()
 		}
 	}
 }
 
+func (r *Raft) candidateState() {
+	slog.InfoContext(r.ctx, "candidate state identified")
+	slog.InfoContext(r.ctx, "locking mutex")
+	r.mu.Lock()
+	currentTerm, err := r.currentTerm()
+	if err != nil {
+		log.Fatal("failed to get current term: " + err.Error())
+	}
+	currentTerm += 1
+	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
+	if err := r.setCurrentTerm(currentTerm); err != nil {
+		log.Fatal("failed to set current term: " + err.Error())
+	}
+	r.mu.Unlock()
+
+	slog.InfoContext(r.ctx, "voting for itself")
+	if err := r.setVotedFor(r.id); err != nil {
+		log.Fatal("failed to vote for self: " + err.Error())
+	}
+
+	slog.InfoContext(r.ctx, "reseting election timeout")
+	r.resetElectionTimeout()
+	slog.InfoContext(r.ctx, "requesting votes")
+	r.requestVotes()
+
+	slog.InfoContext(r.ctx, "unlocking mutex")
+}
+
 func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
-	log.Fatal("not implemented yet")
-	return -1, false, nil
+	slog.InfoContext(r.ctx, "locking mutex")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	slog.InfoContext(r.ctx, "getting current term")
+	currentTerm, err := r.currentTerm()
+	if err != nil {
+		return -1, false, err
+	}
+	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
+	if req.Term < currentTerm {
+		slog.InfoContext(r.ctx, fmt.Sprintf("req term smaller than current term: %d < %d", req.Term, currentTerm))
+		return currentTerm, false, nil
+	}
+	votedFor, err := r.votedFor()
+	if err != nil {
+		return -1, false, err
+	}
+	slog.InfoContext(r.ctx, fmt.Sprintf("voted for: %d", votedFor))
+
+	// TODO: missing log validation
+	// no peer ID can be negative
+	if votedFor < 0 {
+		slog.InfoContext(r.ctx, "didn't vote for anyone")
+		err := r.setVotedFor(req.CandidateID)
+		return currentTerm, true, err
+	}
+	slog.InfoContext(r.ctx, "voting false")
+	return currentTerm, false, nil
 }
 
 func (r *Raft) requestVotes() {
@@ -190,11 +226,11 @@ func (r *Raft) requestVotes() {
 
 func (r *Raft) resetElectionTimeout() {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	slog.InfoContext(r.ctx, "resetting election timeout")
 	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
 	timeout := int(minimumElectionTimeoutMS) + randTimeout
 	r.setElectionTimeout(time.Duration(timeout))
-	r.mu.Unlock()
 }
 
 func (r *Raft) electionTimer() {
