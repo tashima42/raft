@@ -46,12 +46,13 @@ type Raft struct {
 }
 
 type Peer struct {
-	ID      int
-	Address string
+	ID       int
+	Address  string
+	VotedFor int
 }
 
 var (
-	minimumElectionTimeoutMS int32 = 300
+	minimumElectionTimeoutMS int32 = 3000
 	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
 	// heartbeatMS              int32 = 100
 )
@@ -153,37 +154,40 @@ func (r *Raft) Run() {
 	go r.electionTimer()
 	for {
 		if r.State == StateCandidate {
-			r.candidateState()
+			if err := r.candidateState(); err != nil {
+				log.Fatal(err.Error())
+			}
 		}
 	}
 }
 
-func (r *Raft) candidateState() {
+func (r *Raft) candidateState() error {
 	slog.InfoContext(r.ctx, "candidate state identified")
 	slog.InfoContext(r.ctx, "locking mutex")
 	r.mu.Lock()
 	currentTerm, err := r.currentTerm()
 	if err != nil {
-		log.Fatal("failed to get current term: " + err.Error())
+		return errors.New("failed to get current term: " + err.Error())
 	}
 	currentTerm += 1
 	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	if err := r.setCurrentTerm(currentTerm); err != nil {
-		log.Fatal("failed to set current term: " + err.Error())
+		return errors.New("failed to set current term: " + err.Error())
 	}
 	r.mu.Unlock()
 
 	slog.InfoContext(r.ctx, "voting for itself")
 	if err := r.setVotedFor(r.id); err != nil {
-		log.Fatal("failed to vote for self: " + err.Error())
+		return errors.New("failed to vote for self: " + err.Error())
 	}
 
 	slog.InfoContext(r.ctx, "reseting election timeout")
 	r.resetElectionTimeout()
 	slog.InfoContext(r.ctx, "requesting votes")
-	r.requestVotes()
-
-	slog.InfoContext(r.ctx, "unlocking mutex")
+	if err := r.requestVotes(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
@@ -218,10 +222,67 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 	return currentTerm, false, nil
 }
 
-func (r *Raft) requestVotes() {
+func (r *Raft) requestVotes() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	currentTerm, err := r.currentTerm()
+	if err != nil {
+		return err
+	}
 	for _, peer := range r.peers {
 		slog.InfoContext(r.ctx, "requesting vote from: "+peer.Address)
+		// TODO: implement last log
+		peerTerm, voteGranted, err := r.Client.RequestVote(peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
+		if err != nil {
+			return err
+		}
+		if peerTerm > currentTerm {
+			// TODO: set leader
+			r.State = StateFollower
+			return nil
+		}
+		if voteGranted {
+			peer.VotedFor = r.id
+		}
 	}
+
+	wonElection, err := r.countVotes()
+	if err != nil {
+		return err
+	}
+	if wonElection {
+		r.State = StateLeader
+	}
+
+	return nil
+}
+
+// countVotes checks each peer for votes and if the candidate has a majority, returns true or an error
+func (r *Raft) countVotes() (bool, error) {
+	totalVotes := 1
+	votedFor, err := r.votedFor()
+	if err != nil {
+		return false, err
+	}
+	// convert to follower
+	if votedFor != r.id {
+		if err := r.setVotedFor(-1); err != nil {
+			return false, err
+		}
+		r.State = StateFollower
+		return false, nil
+	}
+	for _, peer := range r.peers {
+		if peer.VotedFor == r.id {
+			totalVotes++
+		}
+	}
+	majority := (len(r.peers) + 1) / 2
+
+	if totalVotes < majority {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (r *Raft) resetElectionTimeout() {

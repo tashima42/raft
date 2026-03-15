@@ -11,7 +11,9 @@ import (
 )
 
 type Client interface {
+	// AppendEntries sends entries from the leader to a peer and returns if it was successful, the peer's term and an error
 	AppendEntries(peer Peer, req AppendEntriesRequest) (bool, int, error)
+	// RequestVote communicates with a peer requesting a vote and returns the peer's term, if the vote was granted and an error
 	RequestVote(peer Peer, req RequestVoteRequest) (int, bool, error)
 }
 
