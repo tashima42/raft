@@ -121,6 +121,8 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	slog.InfoContext(r.ctx, fmt.Sprintf("received append entries request: %+v", req))
 	slog.InfoContext(r.ctx, "reseting election timeout")
 	r.resetElectionTimeout()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	slog.InfoContext(r.ctx, "getting current term")
 	currentTerm, err := r.currentTerm()
