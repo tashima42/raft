@@ -35,7 +35,7 @@ func (s RaftState) String() string {
 
 type Raft struct {
 	id            int
-	peers         []Peer
+	peers         []*Peer
 	db            database.Database
 	Client        Client
 	mu            *sync.Mutex
@@ -46,19 +46,13 @@ type Raft struct {
 	ctx           context.Context
 }
 
-type Peer struct {
-	ID       int
-	Address  string
-	VotedFor int
-}
-
 var (
 	minimumElectionTimeoutMS int32 = 3000
 	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
 	heartbeatMS              int32 = 100
 )
 
-func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []Peer) (*Raft, error) {
+func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer) (*Raft, error) {
 	slog.InfoContext(ctx, "creating a new raft instance")
 	raft := &Raft{
 		ctx:          ctx,
@@ -258,18 +252,18 @@ func (r *Raft) sendHeartBeats() error {
 	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	for _, peer := range r.peers {
 		// TODO: implement log index
-		slog.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d", peer.ID))
-		success, term, err := r.Client.AppendEntries(peer, AppendEntriesRequest{Term: currentTerm, LeaderID: r.id, PrevLogIndex: -1, PrevLogTerm: -1, Entries: []database.LogEntry{}, LeaderCommit: -1})
+		slog.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d", peer.ID()))
+		success, term, err := r.Client.AppendEntries(*peer, AppendEntriesRequest{Term: currentTerm, LeaderID: r.id, PrevLogIndex: -1, PrevLogTerm: -1, Entries: []database.LogEntry{}, LeaderCommit: -1})
 		if err != nil {
 			return err
 		}
-		slog.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID, success, term))
+		slog.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
 		if !success {
-			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID))
+			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
 			// TODO: implement retries
 		}
 		if term > currentTerm {
-			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID))
+			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
 			r.State = StateFollower
 			return nil
 		}
@@ -320,13 +314,13 @@ func (r *Raft) requestVotes() error {
 	}
 	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	for _, peer := range r.peers {
-		slog.InfoContext(r.ctx, "requesting vote from: "+peer.Address)
+		slog.InfoContext(r.ctx, "requesting vote from: "+peer.Address())
 		// TODO: implement last log
-		peerTerm, voteGranted, err := r.Client.RequestVote(peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
+		peerTerm, voteGranted, err := r.Client.RequestVote(*peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
 		if err != nil {
 			return err
 		}
-		slog.InfoContext(r.ctx, fmt.Sprintf("requestd vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID, peerTerm, voteGranted))
+		slog.InfoContext(r.ctx, fmt.Sprintf("requestd vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
 		if peerTerm > currentTerm {
 			slog.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
 			// TODO: set leader
@@ -335,7 +329,7 @@ func (r *Raft) requestVotes() error {
 		}
 		if voteGranted {
 			slog.InfoContext(r.ctx, "vote granted, setting peer voted for")
-			peer.VotedFor = r.id
+			peer.SetVotedFor(r.id)
 		}
 	}
 
@@ -372,14 +366,13 @@ func (r *Raft) countVotes() (bool, error) {
 		return false, nil
 	}
 	for _, peer := range r.peers {
-		slog.InfoContext(r.ctx, fmt.Sprintf("peer %d voted for: %d", peer.ID, votedFor))
-		if peer.VotedFor == r.id {
+		slog.InfoContext(r.ctx, fmt.Sprintf("peer %d voted for: %d", peer.ID(), peer.VotedFor()))
+		if peer.VotedFor() == r.id {
 			slog.InfoContext(r.ctx, "voted for server, incrementing total votes")
 			totalVotes++
 		}
 	}
-	// TODO: fix majority of votes needed
-	majority := (len(r.peers) + 1) / 2
+	majority := 1 + ((len(r.peers) + 1) / 2)
 	slog.InfoContext(r.ctx, fmt.Sprintf("majority of votes needed is: %d", majority))
 
 	if totalVotes < majority {

@@ -63,7 +63,7 @@ func (h *httpClient) AppendEntries(peer Peer, req AppendEntriesRequest) (success
 		return false, -1, err
 	}
 
-	r, err := http.NewRequest(http.MethodPost, peer.Address+"/entries", bytes.NewBuffer(body))
+	r, err := http.NewRequest(http.MethodPost, peer.Address()+"/entries", bytes.NewBuffer(body))
 	if err != nil {
 		return false, -1, err
 	}
@@ -91,7 +91,7 @@ func (h *httpClient) RequestVote(peer Peer, req RequestVoteRequest) (term int, v
 		return -1, false, err
 	}
 
-	r, err := http.NewRequest(http.MethodPost, peer.Address+"/request-vote", bytes.NewBuffer(body))
+	r, err := http.NewRequest(http.MethodPost, peer.Address()+"/request-vote", bytes.NewBuffer(body))
 	if err != nil {
 		return -1, false, err
 	}
@@ -121,18 +121,18 @@ func NewMockClient(peers map[int]*Raft) *mockClient {
 }
 
 func (m *mockClient) AppendEntries(peer Peer, req AppendEntriesRequest) (bool, int, error) {
-	raft, exists := m.Peers[peer.ID]
+	raft, exists := m.Peers[peer.ID()]
 	if !exists {
-		return false, -1, fmt.Errorf("peer not found, id: %d", peer.ID)
+		return false, -1, fmt.Errorf("peer not found, id: %d", peer.ID())
 	}
 
 	return raft.AppendEntries(req)
 }
 
 func (m *mockClient) RequestVote(peer Peer, req RequestVoteRequest) (int, bool, error) {
-	raft, exists := m.Peers[peer.ID]
+	raft, exists := m.Peers[peer.ID()]
 	if !exists {
-		return -1, false, fmt.Errorf("peer not found, id: %d", peer.ID)
+		return -1, false, fmt.Errorf("peer not found, id: %d", peer.ID())
 	}
 
 	return raft.RequestVote(req)

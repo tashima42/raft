@@ -26,13 +26,13 @@ var Version = "dev"
 
 // https://github.com/raeperd/kickstart.go/blob/main/main.go
 func main() {
-	if err := run(context.Background(), os.Stdout, os.LookupEnv, Version); err != nil {
+	if err := run(context.Background(), os.Stdout, Version); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool), version string) error {
+func run(ctx context.Context, w io.Writer, version string) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
 
 	peersIDs, peersAddresses, port, id, dbLocation, err := parseFlags()
@@ -40,10 +40,10 @@ func run(ctx context.Context, w io.Writer, lookupEnv func(string) (string, bool)
 		log.Fatal(err.Error())
 	}
 
-	peers := make([]raft.Peer, len(peersIDs))
+	peers := make([]*raft.Peer, len(peersIDs))
 
 	for i, id := range peersIDs {
-		peers[i] = raft.Peer{ID: id, Address: peersAddresses[i]}
+		peers[i] = raft.NewPeer(id, peersAddresses[i])
 	}
 
 	db, err := database.NewSQLite(dbLocation)

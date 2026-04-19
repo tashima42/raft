@@ -120,22 +120,16 @@ func TestRequestVote(t *testing.T) {
 		t.Error(err)
 	}
 
-	raft.peers = []Peer{{ID: 1, Address: "local:1"}, {ID: 2, Address: "local:2"}}
+	raft.peers = []*Peer{NewPeer(1, "local:1"), NewPeer(2, "local:2")}
 	raft.Client = NewMockClient(map[int]*Raft{1: raftPeer1, 2: raftPeer2})
 }
 
 func mockRaft() (*Raft, error) {
 	mockDB := database.NewMockDB()
 	id := 1
-	peers := []Peer{
-		{
-			ID:      2,
-			Address: "local:2",
-		},
-		{
-			ID:      3,
-			Address: "local:3",
-		},
+	peers := []*Peer{
+		NewPeer(1, "local:1"),
+		NewPeer(2, "local:2"),
 	}
 	return NewRaft(context.TODO(), mockDB, NewMockClient(nil), id, peers)
 }
