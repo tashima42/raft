@@ -42,6 +42,7 @@ func (d *SQLite) migrate() error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS 'logs' (
 			id INTEGER NOT NULL PRIMARY KEY,
+			idx INTEGER NOT NULL,
 			action TEXT NOT NULL,
 			term INTEGER NOT NULL,
 			key TEXT NOT NULL,
@@ -86,7 +87,7 @@ func (d *SQLite) AppendLogs(logs []LogEntry) (err error) {
 	var sb strings.Builder
 	args := []any{}
 
-	if _, err := sb.WriteString("INSERT INTO logs(action, term, key, value) VALUES"); err != nil {
+	if _, err := sb.WriteString("INSERT INTO logs(action, term, key, value, idx) VALUES"); err != nil {
 		return err
 	}
 
@@ -96,11 +97,11 @@ func (d *SQLite) AppendLogs(logs []LogEntry) (err error) {
 				return err
 			}
 		}
-		if _, err := sb.WriteString("(?, ?, ?, ?)"); err != nil {
+		if _, err := sb.WriteString("(?, ?, ?, ?, ?)"); err != nil {
 			return err
 		}
 
-		args = append(args, log.Action, log.Term, log.Key, log.Value)
+		args = append(args, log.Action, log.Term, log.Key, log.Value, log.Index)
 	}
 	stmt, err := d.db.Prepare(sb.String())
 	if err != nil {
@@ -117,14 +118,14 @@ func (d *SQLite) AppendLogs(logs []LogEntry) (err error) {
 }
 
 func (d *SQLite) GetLogs() (logs []LogEntry, err error) {
-	rows, err := d.db.Query("SELECT action, term, key, value FROM logs;")
+	rows, err := d.db.Query("SELECT action, term, key, value, idx FROM logs;")
 	if err != nil {
 		return nil, err
 	}
 
 	for rows.Next() {
 		log := LogEntry{}
-		err = rows.Scan(&log.Action, &log.Term, &log.Key, &log.Value)
+		err = rows.Scan(&log.Action, &log.Term, &log.Key, &log.Value, &log.Index)
 		if err != nil {
 			return nil, err
 		}
@@ -142,6 +143,18 @@ func (d *SQLite) GetLogs() (logs []LogEntry, err error) {
 	}()
 
 	return logs, err
+}
+
+func (d *SQLite) GetLog(idx int) (log LogEntry, err error) {
+	var term int
+	var action, key, value string
+	err = d.db.QueryRow("SELECT action, term, key, value FROM logs WHERE idx = ?", idx).Scan(&action, &term, &key, &value)
+	log.Action = action
+	log.Key = key
+	log.Value = value
+	log.Term = term
+	log.Index = idx
+	return log, err
 }
 
 func (d *SQLite) CountLogs() (logCount int, err error) {

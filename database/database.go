@@ -1,6 +1,10 @@
 // Package database wraps stable storage
 package database
 
+import (
+	"database/sql"
+)
+
 type Database interface {
 	open() error
 	migrate() error
@@ -8,12 +12,14 @@ type Database interface {
 	GetRaftValue(key string) (string, error)
 	AppendLogs(logs []LogEntry) error
 	GetLogs() ([]LogEntry, error)
+	GetLog(idx int) (LogEntry, error)
 	CountLogs() (int, error)
 	Close() error
 }
 
 type LogEntry struct {
 	Term   int    `json:"term"`
+	Index  int    `json:"index"`
 	Action string `json:"action"`
 	Key    string `json:"key"`
 	Value  string `json:"value"`
@@ -45,7 +51,11 @@ func (m *MockDB) SetRaftValue(key, value string) error {
 }
 
 func (m *MockDB) GetRaftValue(key string) (string, error) {
-	return m.raft[key], nil
+	value, found := m.raft[key]
+	if !found {
+		return "", sql.ErrNoRows
+	}
+	return value, nil
 }
 
 func (m *MockDB) AppendLogs(logs []LogEntry) error {
@@ -55,6 +65,13 @@ func (m *MockDB) AppendLogs(logs []LogEntry) error {
 
 func (m *MockDB) GetLogs() ([]LogEntry, error) {
 	return m.logs, nil
+}
+
+func (m *MockDB) GetLog(idx int) (LogEntry, error) {
+	if len(m.logs) <= idx {
+		return LogEntry{}, sql.ErrNoRows
+	}
+	return m.logs[idx], nil
 }
 
 func (m *MockDB) CountLogs() (int, error) {
