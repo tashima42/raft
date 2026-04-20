@@ -146,14 +146,49 @@ func parseFlags() ([]int, []string, int, int, string, error) {
 // You can add custom [http.Handler] as needed.
 func route(log *slog.Logger, version string, r *raft.Raft) http.Handler {
 	mux := http.NewServeMux()
+
 	mux.Handle("GET /health", handleGetHealth(version))
 	mux.HandleFunc("POST /entries", handleAppendEntries(r))
 	mux.HandleFunc("POST /request-vote", handleRequestVote(r))
-	mux.HandleFunc("GET /key/{key}", handleGetKeyValue(r))
+
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("GET /api/key/{key}", handleGetKeyValue(r))
+	apiMux.HandleFunc("PUT /api/key", handleSetKeyValue(r))
+
+	middleware := forwardToLeader(r)
+	mux.Handle("/api/", middleware(apiMux))
 
 	handler := accesslog(mux, log)
 	handler = recovery(handler, log)
 	return handler
+}
+
+func forwardToLeader(r *raft.Raft) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if r.IsLeader() {
+				next.ServeHTTP(w, req)
+				return
+			}
+
+			leaderAddr, err := r.LeaderAddress()
+			if err != nil {
+				http.Error(w, "Failed to get leader address: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if leaderAddr == "" {
+				http.Error(w, "Leader not found", http.StatusInternalServerError)
+				return
+			}
+
+			targetURL := leaderAddr + req.URL.Path
+			if req.URL.RawQuery != "" {
+				targetURL += "?" + req.URL.RawQuery
+			}
+
+			http.Redirect(w, req, targetURL, http.StatusTemporaryRedirect)
+		})
+	}
 }
 
 // accesslog is a middleware that logs request and response details,

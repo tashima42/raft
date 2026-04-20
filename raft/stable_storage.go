@@ -13,6 +13,7 @@ const (
 	logIndexKey     = "internal-log-index"
 	prevLogTermKey  = "internal-prev-log-term"
 	leaderCommitKey = "internal-leader-commit"
+	leaderIDKey     = "internal-leader-id"
 )
 
 func (r *Raft) currentTerm() (int, error) {
@@ -81,6 +82,18 @@ func (r *Raft) prevLogIndex() (int, error) {
 	}
 
 	return strconv.Atoi(value)
+}
+
+func (r *Raft) setLeaderID(leaderID int) error {
+	return r.db.SetRaftValue(leaderIDKey, strconv.Itoa(leaderID))
+}
+
+func (r *Raft) leaderID() (int, error) {
+	leaderIDStr, err := r.db.GetRaftValue(leaderIDKey)
+	if err != nil {
+		return -1, err
+	}
+	return strconv.Atoi(leaderIDStr)
 }
 
 //

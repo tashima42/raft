@@ -119,6 +119,16 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 		}
 	}
 
+	slog.InfoContext(ctx, "checking if there is a leaderID")
+	if _, err := raft.leaderID(); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, errors.New("failed to get leader id: " + err.Error())
+		}
+		if err := raft.setLeaderID(-1); err != nil {
+			return nil, errors.New("failed to set leader id: " + err.Error())
+		}
+	}
+
 	slog.InfoContext(ctx, "initiating log on start")
 	if err := raft.initLog(); err != nil {
 		return nil, errors.New("failed to init and apply log: " + err.Error())
@@ -151,6 +161,27 @@ func (r *Raft) initLog() error {
 		}
 	}
 	return nil
+}
+
+func (r *Raft) IsLeader() bool {
+	return r.State == StateLeader
+}
+
+func (r *Raft) LeaderAddress() (string, error) {
+	leaderID, err := r.leaderID()
+	if err != nil {
+		return "", errors.New("failed to get leader id: " + err.Error())
+	}
+	var leader *Peer
+	for _, peer := range r.peers {
+		if peer.ID() == leaderID {
+			leader = peer
+		}
+	}
+	if leader == nil {
+		return "", errors.New("leader not found")
+	}
+	return leader.Address(), nil
 }
 
 // AppendEntries receives entries from the leader and checks if they are valid
@@ -212,6 +243,10 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		if err := r.KeyVal.Exec(KeyValAction(entry.Action), entry.Key, entry.Value); err != nil {
 			return false, currentTerm, errors.New("failed to exec operation on keyVal store: " + err.Error())
 		}
+	}
+
+	if err := r.setLeaderID(req.LeaderID); err != nil {
+		return false, currentTerm, errors.New("failed to set leader id: " + err.Error())
 	}
 
 	slog.InfoContext(r.ctx, "replying true")

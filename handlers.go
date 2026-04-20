@@ -95,3 +95,29 @@ func handleGetKeyValue(r *raft.Raft) http.HandlerFunc {
 		}
 	}
 }
+
+func handleSetKeyValue(r *raft.Raft) http.HandlerFunc {
+	type requestBody struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	type responseBody struct {
+		Success bool `json:"success"`
+	}
+	return func(w http.ResponseWriter, req *http.Request) {
+		setKeyBody, err := decode[requestBody](req)
+		if err != nil {
+			http.Error(w, "failed to decode req: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		r.KeyVal.Set(setKeyBody.Key, setKeyBody.Value)
+
+		res := responseBody{Success: true}
+
+		if err := encode(w, nil, http.StatusOK, res); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
