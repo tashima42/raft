@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -34,50 +35,88 @@ func (s RaftState) String() string {
 }
 
 type Raft struct {
-	id            int
-	peers         []*Peer
-	db            database.Database
-	Client        Client
-	mu            *sync.Mutex
-	electionTick  <-chan time.Time
-	heartBeatTick <-chan time.Time
-	KeyVal        keyVal
-	State         RaftState
-	ctx           context.Context
+	id                 int
+	peers              []*Peer
+	db                 database.Database
+	Client             Client
+	mu                 *sync.Mutex
+	electionTimeout    time.Duration
+	heartbeatTimeout   time.Duration
+	electionResetTime  time.Time
+	heartbeatResetTime time.Time
+	KeyVal             keyVal
+	State              RaftState
+	ctx                context.Context
 }
 
 var (
-	minimumElectionTimeoutMS int32 = 3000
-	maximumElectionTimeoutMS int32 = 2 * minimumElectionTimeoutMS
-	heartbeatMS              int32 = 100
+	minimumElectionTimeoutMS int64         = 300
+	maximumElectionTimeoutMS int64         = 2 * minimumElectionTimeoutMS
+	heartbeatTimeout         time.Duration = time.Millisecond * 100
 )
 
 func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer) (*Raft, error) {
 	slog.InfoContext(ctx, "creating a new raft instance")
 	raft := &Raft{
-		ctx:          ctx,
-		id:           id,
-		peers:        peers,
-		db:           db,
-		Client:       client,
-		mu:           &sync.Mutex{},
-		electionTick: nil,
-		KeyVal:       newKeyVal(),
-		State:        StateFollower,
+		ctx:                ctx,
+		id:                 id,
+		peers:              peers,
+		db:                 db,
+		Client:             client,
+		mu:                 &sync.Mutex{},
+		heartbeatTimeout:   heartbeatTimeout,
+		electionResetTime:  time.Now(),
+		heartbeatResetTime: time.Now(),
+		KeyVal:             newKeyVal(),
+		State:              StateFollower,
 	}
 
-	slog.InfoContext(ctx, "resetting election timeout for the first time")
 	raft.resetElectionTimeout()
-	slog.InfoContext(ctx, "setting heartbeat timeout")
-	raft.setHeartBeatTimeout(time.Duration(heartbeatMS))
 
-	slog.InfoContext(ctx, "setting current term to 0")
-	if err := raft.setCurrentTerm(0); err != nil {
-		return nil, err
+	slog.InfoContext(ctx, "checking if there is a current term")
+	if _, err := raft.currentTerm(); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, errors.New("failed to get current term: " + err.Error())
+		}
+		slog.InfoContext(ctx, "setting current term to 0")
+		if err := raft.setCurrentTerm(0); err != nil {
+			return nil, err
+		}
 	}
-	slog.InfoContext(ctx, "setting voted for to invalid value -1")
-	if err := raft.setVotedFor(-1); err != nil {
-		return nil, err
+
+	slog.InfoContext(ctx, "checking if there is voted for")
+	if _, err := raft.votedFor(); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, errors.New("failed to get voted for: " + err.Error())
+		}
+		slog.InfoContext(ctx, "setting voted for to invalid value -1")
+		if err := raft.setVotedFor(-1); err != nil {
+			return nil, err
+		}
+	}
+
+	slog.InfoContext(ctx, "checking if there is a prevLogIndex")
+	if _, err := raft.prevLogIndex(); err != nil {
+		// if there is no prev log index, set to 0 to indicate that there are no logs
+		// and prevent the no rows error from being returned when trying to get the prev log index later on
+		if err != sql.ErrNoRows {
+			return nil, errors.New("failed to get previous log index: " + err.Error())
+		}
+		if err := raft.setPrevLogIndex(0); err != nil {
+			return nil, errors.New("failed to set previous log index: " + err.Error())
+		}
+	}
+
+	slog.InfoContext(ctx, "checking if there is a prevLogTerm")
+	if _, err := raft.prevLogTerm(); err != nil {
+		// if there is no prev log term, set to 0 to indicate that there are no logs
+		// and prevent the no rows error from being returned when trying to get the prev log term later on
+		if err != sql.ErrNoRows {
+			return nil, errors.New("failed to get previous log term: " + err.Error())
+		}
+		if err := raft.setPrevLogTerm(0); err != nil {
+			return nil, errors.New("failed to set previous log term: " + err.Error())
+		}
 	}
 
 	slog.InfoContext(ctx, "initiating log on start")
@@ -119,7 +158,6 @@ func (r *Raft) initLog() error {
 func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	// reset election timeout and prevent server from starting new elections
 	slog.InfoContext(r.ctx, fmt.Sprintf("received append entries request: %+v", req))
-	slog.InfoContext(r.ctx, "reseting election timeout")
 	r.resetElectionTimeout()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -135,6 +173,17 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		slog.InfoContext(r.ctx, "request term is smaller than current term, replying false")
 		return false, currentTerm, nil
 	}
+
+	// if req.PrevLogIndex
+	prevLogTerm, err := r.prevLogTerm()
+	if err != nil {
+		return false, currentTerm, errors.New("failed to get previous log term: " + err.Error())
+	}
+	if prevLogTerm != req.PrevLogTerm {
+		return false, currentTerm, nil
+	}
+
+	// TODO: if there is a conflict with the existing log, delete the existing log and all that follow it
 
 	slog.InfoContext(r.ctx, fmt.Sprintf("setting current term to %d", req.Term))
 	if err := r.setCurrentTerm(req.Term); err != nil {
@@ -156,11 +205,7 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		slog.InfoContext(r.ctx, "previous log index from request is bigger than current log count, replying false")
 		return false, currentTerm, nil
 	}
-	// 	prevLog := r.stableState.Log[req.PrevLogIndex]
-	// 	if prevLog.Term != req.Term {
-	// 		return false, currentTerm, nil
-	// 	}
-	//
+
 	slog.InfoContext(r.ctx, "ranging through request entries")
 	for _, entry := range req.Entries {
 		slog.InfoContext(r.ctx, fmt.Sprintf("executing log on keyvalue state machine: (%s) | %s -> %s", entry.Action, entry.Key, entry.Value))
@@ -177,7 +222,8 @@ func (r *Raft) Run() {
 	slog.InfoContext(r.ctx, "running raft")
 	slog.InfoContext(r.ctx, "starting election timer")
 	go r.electionTimer()
-	for {
+	runTicker := time.NewTicker(10 * time.Millisecond).C
+	for range runTicker {
 		switch r.State {
 		case StateFollower:
 			// slog.InfoContext(r.ctx, "follower state")
@@ -196,10 +242,11 @@ func (r *Raft) Run() {
 }
 
 func (r *Raft) leaderState() error {
-	for range r.heartBeatTick {
+	heartbeatTicker := time.NewTicker(10 * time.Millisecond).C
+	for range heartbeatTicker {
 		slog.InfoContext(r.ctx, "heartbeat tick received")
 		if r.State != StateLeader {
-			slog.InfoContext(r.ctx, "not in leader state, returning")
+			slog.InfoContext(r.ctx, "not in leader state, ignoring heartbeat tick")
 			return nil
 		}
 		slog.InfoContext(r.ctx, "sending heartbeats to peers")
@@ -231,7 +278,6 @@ func (r *Raft) candidateState() error {
 		return errors.New("failed to vote for self: " + err.Error())
 	}
 
-	slog.InfoContext(r.ctx, "reseting election timeout")
 	r.resetElectionTimeout()
 	slog.InfoContext(r.ctx, "requesting votes")
 	if err := r.requestVotes(); err != nil {
@@ -251,13 +297,26 @@ func (r *Raft) sendHeartBeats() error {
 	if err != nil {
 		return errors.New("failed to get current term: " + err.Error())
 	}
+	prevLogIndex, err := r.prevLogIndex()
+	if err != nil {
+		return errors.New("failed to get previous log index: " + err.Error())
+	}
+	prevLogTerm, err := r.prevLogTerm()
+	if err != nil {
+		return errors.New("failed to get previous log term: " + err.Error())
+	}
+	leaderCommit, err := r.prevLogTerm()
+	if err != nil {
+		return errors.New("failed to get leader commit: " + err.Error())
+	}
 	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	for _, peer := range r.peers {
-		// TODO: implement log index
 		slog.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d", peer.ID()))
-		success, term, err := r.Client.AppendEntries(*peer, AppendEntriesRequest{Term: currentTerm, LeaderID: r.id, PrevLogIndex: -1, PrevLogTerm: -1, Entries: []database.LogEntry{}, LeaderCommit: -1})
+		appendEntriesReq := AppendEntriesRequest{Term: currentTerm, LeaderID: r.id, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, Entries: []database.LogEntry{}, LeaderCommit: leaderCommit}
+		slog.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
+		success, term, err := r.Client.AppendEntries(*peer, appendEntriesReq)
 		if err != nil {
-			return err
+			return errors.New("failed to send append entries request to peer: " + err.Error())
 		}
 		slog.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
 		if !success {
@@ -275,6 +334,8 @@ func (r *Raft) sendHeartBeats() error {
 }
 
 func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
+	slog.InfoContext(r.ctx, fmt.Sprintf("received request vote request: %+v", req))
+	r.resetElectionTimeout()
 	slog.InfoContext(r.ctx, "locking mutex")
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -289,16 +350,34 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 		slog.InfoContext(r.ctx, fmt.Sprintf("req term smaller than current term: %d < %d", req.Term, currentTerm))
 		return currentTerm, false, nil
 	}
+	if req.Term > currentTerm {
+		currentTerm = req.Term
+		if err := r.setCurrentTerm(currentTerm); err != nil {
+			return currentTerm, false, errors.New("failed to set current term: " + err.Error())
+		}
+	}
 	votedFor, err := r.votedFor()
 	if err != nil {
-		return -1, false, err
+		return -1, false, errors.New("failed to get voted for: " + err.Error())
 	}
-	slog.InfoContext(r.ctx, fmt.Sprintf("voted for: %d", votedFor))
+	slog.InfoContext(r.ctx, fmt.Sprintf("request voted - voted for: %d", votedFor))
 
-	// TODO: missing log validation
-	// no peer ID can be negative
-	if votedFor < 0 {
-		slog.InfoContext(r.ctx, "didn't vote for anyone")
+	lastLogIndex, err := r.prevLogIndex()
+	if err != nil {
+		return currentTerm, false, errors.New("failed to get last log index: " + err.Error())
+	}
+	lastLogTerm, err := r.prevLogTerm()
+	if err != nil {
+		return currentTerm, false, errors.New("failed to get last log term: " + err.Error())
+	}
+
+	if votedFor < 0 || votedFor == req.CandidateID {
+		if req.LastLogIndex < lastLogIndex || (req.LastLogIndex == lastLogIndex && req.LastLogTerm < lastLogTerm) {
+			slog.InfoContext(r.ctx, "candidate's log is not as up to date as current server's log, voting false")
+			return currentTerm, false, nil
+		}
+
+		slog.InfoContext(r.ctx, "didn't vote for anyone or voted for candidate, voting true and setting voted for to candidate id")
 		err := r.setVotedFor(req.CandidateID)
 		return currentTerm, true, err
 	}
@@ -322,7 +401,7 @@ func (r *Raft) requestVotes() error {
 		if err != nil {
 			return err
 		}
-		slog.InfoContext(r.ctx, fmt.Sprintf("requestd vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
+		slog.InfoContext(r.ctx, fmt.Sprintf("requeste vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
 		if peerTerm > currentTerm {
 			slog.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
 			// TODO: set leader
@@ -389,29 +468,30 @@ func (r *Raft) resetElectionTimeout() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	slog.InfoContext(r.ctx, "resetting election timeout")
-	randTimeout := rand.IntN(int(maximumElectionTimeoutMS - minimumElectionTimeoutMS))
-	timeout := int(minimumElectionTimeoutMS) + randTimeout
-	r.setElectionTimeout(time.Duration(timeout))
+	randTimeout := rand.Int64N(maximumElectionTimeoutMS - minimumElectionTimeoutMS)
+	r.electionTimeout = time.Millisecond * time.Duration(minimumElectionTimeoutMS+randTimeout)
+	slog.InfoContext(r.ctx, fmt.Sprintf("new election timeout is: %s", r.electionTimeout.String()))
+	r.electionResetTime = time.Now()
 }
 
 func (r *Raft) electionTimer() {
 	slog.InfoContext(r.ctx, "running election timer")
 
-	for range r.electionTick {
-		slog.InfoContext(r.ctx, "election tick received, locking mutex")
+	electionTicker := time.NewTicker(10 * time.Millisecond).C
+
+	for range electionTicker {
 		r.mu.Lock()
-		slog.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
-		r.State = StateCandidate
+		if r.State == StateLeader {
+			slog.InfoContext(r.ctx, "in leader state, ignoring election tick")
+			r.mu.Unlock()
+			return
+		}
+		if time.Since(r.electionResetTime) >= r.electionTimeout {
+			slog.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
+			r.State = StateCandidate
+			r.mu.Unlock()
+			return
+		}
 		r.mu.Unlock()
 	}
-}
-
-func (r *Raft) setElectionTimeout(timeout time.Duration) {
-	slog.InfoContext(r.ctx, fmt.Sprintf("setting election timeout to: %d", timeout))
-	r.electionTick = time.NewTimer(timeout * time.Millisecond).C
-}
-
-func (r *Raft) setHeartBeatTimeout(timeout time.Duration) {
-	slog.InfoContext(r.ctx, fmt.Sprintf("setting heartbeat timeout to: %d", timeout))
-	r.heartBeatTick = time.NewTimer(timeout * time.Millisecond).C
 }
