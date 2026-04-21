@@ -177,7 +177,7 @@ func (r *Raft) IsLeader() bool {
 	return r.State == StateLeader
 }
 
-func (r *Raft) LeaderAddress() (string, error) {
+func (r *Raft) LeaderAPIAddress() (string, error) {
 	leaderID, err := r.leaderID()
 	if err != nil {
 		return "", errors.New("failed to get leader id: " + err.Error())
@@ -191,7 +191,7 @@ func (r *Raft) LeaderAddress() (string, error) {
 	if leader == nil {
 		return "", errors.New("leader not found")
 	}
-	return leader.Address(), nil
+	return leader.APIAddress(), nil
 }
 
 func (r *Raft) AddToLog(action KeyValAction, key, value string) error {

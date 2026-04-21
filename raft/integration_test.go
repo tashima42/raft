@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"maps"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func newTestCluster(t *testing.T, size int) *testCluster {
 			if peerID == id {
 				continue
 			}
-			peers = append(peers, NewPeer(peerID, addresses[peerID]))
+			peers = append(peers, NewPeer(peerID, addresses[peerID], addresses[peerID]))
 		}
 
 		node, err := NewRaft(context.Background(), database.NewMockDB(), NewMockClient(nil), id, peers)
@@ -45,18 +46,10 @@ func newTestCluster(t *testing.T, size int) *testCluster {
 	}
 
 	for _, node := range nodes {
-		node.Client = NewMockClient(cloneNodeMap(byID))
+		node.Client = NewMockClient(maps.Clone(byID))
 	}
 
 	return &testCluster{nodes: nodes, byID: byID}
-}
-
-func cloneNodeMap(src map[int]*Raft) map[int]*Raft {
-	out := make(map[int]*Raft, len(src))
-	for id, node := range src {
-		out[id] = node
-	}
-	return out
 }
 
 func forceElection(t *testing.T, node *Raft) {

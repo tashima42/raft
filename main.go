@@ -39,7 +39,7 @@ func main() {
 func run(ctx context.Context, w io.Writer, version string) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
 
-	peersIDs, peersAddresses, port, apiPort, id, dbLocation, err := parseFlags()
+	peersIDs, peersAddresses, peersAPIAddresses, port, apiPort, id, dbLocation, err := parseFlags()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
@@ -47,7 +47,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 	peers := make([]*raft.Peer, len(peersIDs))
 
 	for i, id := range peersIDs {
-		peers[i] = raft.NewPeer(id, peersAddresses[i])
+		peers[i] = raft.NewPeer(id, peersAddresses[i], peersAPIAddresses[i])
 	}
 
 	db, err := database.NewSQLite(dbLocation)
@@ -125,36 +125,41 @@ func run(ctx context.Context, w io.Writer, version string) error {
 }
 
 // parseFlags returns peersIDs, peersAddresses, port, id, dbLocation, error
-func parseFlags() ([]int, []string, int, int, int, string, error) {
+func parseFlags() ([]int, []string, []string, int, int, int, string, error) {
 	port := flag.Int("port", 6437, "port to run grpc server on")
 	apiPort := flag.Int("api-port", 5437, "port to run http server on")
 	sid := flag.Int("id", 1, "raft server id")
 	peersIDsStr := flag.String("peers-ids", "", "comma separated ids. E.g: 1,2,3")
-	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: http://localhost:6438,http://localhost:6439")
+	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: localhost:6438,localhost:6439")
+	peersAPIAddressesStr := flag.String("peers-api-addresses", "", "comma separated addresses. e.g: http://localhost:5438,http://localhost:5439")
 	dbLocation := flag.String("db-location", "raft.db", "db location. e.g: raft-1.db")
 	flag.Parse()
 
 	if port == nil {
-		return nil, nil, -1, -1, -1, "", errors.New("empty port")
+		return nil, nil, nil, -1, -1, -1, "", errors.New("empty port")
 	}
 	if apiPort == nil {
-		return nil, nil, -1, -1, -1, "", errors.New("empty api port")
+		return nil, nil, nil, -1, -1, -1, "", errors.New("empty api port")
 	}
 	if sid == nil {
-		return nil, nil, -1, -1, -1, "", errors.New("empty id")
+		return nil, nil, nil, -1, -1, -1, "", errors.New("empty id")
 	}
 	if peersIDsStr == nil {
-		return nil, nil, -1, -1, -1, "", errors.New("empty peers ids")
+		return nil, nil, nil, -1, -1, -1, "", errors.New("empty peers ids")
 	}
 	if peersAddressesStr == nil {
-		return nil, nil, -1, -1, -1, "", errors.New("empty peers addresses")
+		return nil, nil, nil, -1, -1, -1, "", errors.New("empty peers addresses")
+	}
+	if peersAPIAddressesStr == nil {
+		return nil, nil, nil, -1, -1, -1, "", errors.New("empty peers api addresses")
 	}
 
 	pis := strings.Split(*peersIDsStr, ",")
 	ads := strings.Split(*peersAddressesStr, ",")
+	apids := strings.Split(*peersAPIAddressesStr, ",")
 
-	if len(pis) != len(ads) {
-		return nil, nil, -1, -1, -1, "", errors.New("peers ids and perrs addresses have different lengths")
+	if len(pis) != len(ads) || len(ads) != len(apids) {
+		return nil, nil, nil, -1, -1, -1, "", errors.New("peers ids and peers addresses or peers api addresses have different lengths")
 	}
 
 	ids := make([]int, len(pis))
@@ -162,12 +167,12 @@ func parseFlags() ([]int, []string, int, int, int, string, error) {
 	for i, pid := range pis {
 		id, err := strconv.Atoi(pid)
 		if err != nil {
-			return nil, nil, -1, -1, -1, "", err
+			return nil, nil, nil, -1, -1, -1, "", err
 		}
 		ids[i] = id
 	}
 
-	return ids, ads, *port, *apiPort, *sid, *dbLocation, nil
+	return ids, ads, apids, *port, *apiPort, *sid, *dbLocation, nil
 }
 
 // route sets up and returns an [http.Handler] for all the server routes.
@@ -200,7 +205,7 @@ func forwardToLeader(r *raft.Raft) func(http.Handler) http.Handler {
 				return
 			}
 
-			leaderAddr, err := r.LeaderAddress()
+			leaderAddr, err := r.LeaderAPIAddress()
 			if err != nil {
 				http.Error(w, "Failed to get leader address: "+err.Error(), http.StatusInternalServerError)
 				return

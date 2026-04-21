@@ -30,49 +30,6 @@ func handleGetHealth(version string) http.HandlerFunc {
 	}
 }
 
-func handleAppendEntries(r *raft.Raft) http.HandlerFunc {
-	return func(w http.ResponseWriter, req *http.Request) {
-		appendEntriesReq, err := decode[raft.AppendEntriesRequest](req)
-		if err != nil {
-			http.Error(w, "failed to decode req: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		success, term, err := r.AppendEntries(appendEntriesReq)
-		if err != nil {
-			http.Error(w, "failed to append entries: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		res := raft.AppendEntriesResponse{Term: term, Success: success}
-
-		if err := encode(w, nil, http.StatusOK, res); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-}
-
-func handleRequestVote(r *raft.Raft) http.HandlerFunc {
-	return func(w http.ResponseWriter, req *http.Request) {
-		requestVotesReq, err := decode[raft.RequestVoteRequest](req)
-		if err != nil {
-			http.Error(w, "failed to decode req: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		term, voteGranted, err := r.RequestVote(requestVotesReq)
-		if err != nil {
-			http.Error(w, "failed to grant vote: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		res := raft.RequestVoteResponse{Term: term, VoteGranted: voteGranted}
-		if err := encode(w, nil, http.StatusOK, res); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-	}
-}
-
 func handleGetKeyValue(r *raft.Raft) http.HandlerFunc {
 	type responseBody struct {
 		Key   string `json:"key"`
