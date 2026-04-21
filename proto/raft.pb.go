@@ -71,7 +71,7 @@ func (Action) EnumDescriptor() ([]byte, []int) {
 type AppendEntriesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          int32                  `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	LeaderId      int32                  `protobuf:"varint,2,opt,name=leaderId,proto3" json:"leaderId,omitempty"`
+	LeaderID      int32                  `protobuf:"varint,2,opt,name=leaderID,proto3" json:"leaderID,omitempty"`
 	PrevLogIndex  int32                  `protobuf:"varint,3,opt,name=prevLogIndex,proto3" json:"prevLogIndex,omitempty"`
 	PrevLogTerm   int32                  `protobuf:"varint,4,opt,name=prevLogTerm,proto3" json:"prevLogTerm,omitempty"`
 	LeaderCommit  int32                  `protobuf:"varint,5,opt,name=leaderCommit,proto3" json:"leaderCommit,omitempty"`
@@ -117,9 +117,9 @@ func (x *AppendEntriesRequest) GetTerm() int32 {
 	return 0
 }
 
-func (x *AppendEntriesRequest) GetLeaderId() int32 {
+func (x *AppendEntriesRequest) GetLeaderID() int32 {
 	if x != nil {
-		return x.LeaderId
+		return x.LeaderID
 	}
 	return 0
 }
@@ -283,7 +283,7 @@ func (x *LogEntry) GetValue() string {
 type RequestVoteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          int32                  `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	CandidateId   int32                  `protobuf:"varint,2,opt,name=candidateId,proto3" json:"candidateId,omitempty"`
+	CandidateID   int32                  `protobuf:"varint,2,opt,name=candidateID,proto3" json:"candidateID,omitempty"`
 	LastLogIndex  int32                  `protobuf:"varint,3,opt,name=lastLogIndex,proto3" json:"lastLogIndex,omitempty"`
 	LastLogTerm   int32                  `protobuf:"varint,4,opt,name=lastLogTerm,proto3" json:"lastLogTerm,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -327,9 +327,9 @@ func (x *RequestVoteRequest) GetTerm() int32 {
 	return 0
 }
 
-func (x *RequestVoteRequest) GetCandidateId() int32 {
+func (x *RequestVoteRequest) GetCandidateID() int32 {
 	if x != nil {
-		return x.CandidateId
+		return x.CandidateID
 	}
 	return 0
 }
@@ -408,7 +408,7 @@ const file_raft_proto_rawDesc = "" +
 	"raft.proto\x12\x05proto\"\xdb\x01\n" +
 	"\x14AppendEntriesRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12\x1a\n" +
-	"\bleaderId\x18\x02 \x01(\x05R\bleaderId\x12\"\n" +
+	"\bleaderID\x18\x02 \x01(\x05R\bleaderID\x12\"\n" +
 	"\fprevLogIndex\x18\x03 \x01(\x05R\fprevLogIndex\x12 \n" +
 	"\vprevLogTerm\x18\x04 \x01(\x05R\vprevLogTerm\x12\"\n" +
 	"\fleaderCommit\x18\x05 \x01(\x05R\fleaderCommit\x12)\n" +
@@ -424,7 +424,7 @@ const file_raft_proto_rawDesc = "" +
 	"\x05value\x18\x05 \x01(\tR\x05value\"\x90\x01\n" +
 	"\x12RequestVoteRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12 \n" +
-	"\vcandidateId\x18\x02 \x01(\x05R\vcandidateId\x12\"\n" +
+	"\vcandidateID\x18\x02 \x01(\x05R\vcandidateID\x12\"\n" +
 	"\flastLogIndex\x18\x03 \x01(\x05R\flastLogIndex\x12 \n" +
 	"\vlastLogTerm\x18\x04 \x01(\x05R\vlastLogTerm\"K\n" +
 	"\x13RequestVoteResponse\x12\x12\n" +
