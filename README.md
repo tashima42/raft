@@ -2,6 +2,18 @@
 
 This is an implementation of the Raft protocol described on [raft.github.io](raft.github.io)
 
+## TODO
+- [x] Elections
+- [x] Persistent storage
+- [x] Key-value store with HTTP API
+- [x] Heartbeats
+- [x] Replicated log
+- [ ] Peer registration and removal
+- [ ] Log compaction
+- [ ] Request replay protection
+- [ ] Fast Raft
+- [ ] Remove HTTP raft client and server
+
 ## Testing
 
 Integration and e2e tests:
