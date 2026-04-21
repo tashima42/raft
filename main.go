@@ -52,7 +52,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 
 	db, err := database.NewSQLite(dbLocation)
 	if err != nil {
-		return errors.New("failed to start raft: " + err.Error())
+		return fmt.Errorf("failed to start raft: %w", err)
 	}
 
 	grpcClient, err := raft.NewGRPCClient(peers)
@@ -62,7 +62,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 
 	r, err := raft.NewRaft(ctx, db, grpcClient, id, peers)
 	if err != nil {
-		return errors.New("failed to start raft: " + err.Error())
+		return fmt.Errorf("failed to start raft: %w", err)
 	}
 
 	go r.Run()
@@ -106,7 +106,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 		slog.InfoContext(ctx, "shutting down server")
 
 		if err := r.GracefullyShutDown(); err != nil {
-			return errors.New("failed to gracefully shutdown raft: " + err.Error())
+			return fmt.Errorf("failed to gracefully shutdown raft: %w", err)
 		}
 
 		// Create a new context for shutdown with timeout

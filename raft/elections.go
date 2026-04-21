@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -140,18 +139,18 @@ func (r *Raft) candidateState() error {
 	r.mu.Lock()
 	currentTerm, err := r.currentTerm()
 	if err != nil {
-		return errors.New("failed to get current term: " + err.Error())
+		return fmt.Errorf("failed to get current term: %w", err)
 	}
 	currentTerm += 1
 	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	if err := r.setCurrentTerm(currentTerm); err != nil {
-		return errors.New("failed to set current term: " + err.Error())
+		return fmt.Errorf("failed to set current term: %w", err)
 	}
 	r.mu.Unlock()
 
 	slog.InfoContext(r.ctx, "voting for itself")
 	if err := r.setVotedFor(r.id); err != nil {
-		return errors.New("failed to vote for self: " + err.Error())
+		return fmt.Errorf("failed to vote for self: %w", err)
 	}
 
 	r.resetElectionTimeout()

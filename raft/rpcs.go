@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 )
@@ -18,7 +17,7 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	slog.InfoContext(r.ctx, "getting current term")
 	currentTerm, err := r.currentTerm()
 	if err != nil {
-		return false, currentTerm, errors.New("failed to get current term: " + err.Error())
+		return false, currentTerm, fmt.Errorf("failed to get current term: %w", err)
 	}
 	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	// (§5.1)
@@ -30,7 +29,7 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	// if req.PrevLogIndex
 	prevLogTerm, err := r.prevLogTerm()
 	if err != nil {
-		return false, currentTerm, errors.New("failed to get previous log term: " + err.Error())
+		return false, currentTerm, fmt.Errorf("failed to get previous log term: %w", err)
 	}
 	if prevLogTerm != req.PrevLogTerm {
 		return false, currentTerm, nil
@@ -40,18 +39,18 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 
 	slog.InfoContext(r.ctx, fmt.Sprintf("setting current term to %d", req.Term))
 	if err := r.setCurrentTerm(req.Term); err != nil {
-		return false, currentTerm, errors.New("failed to set current term: " + err.Error())
+		return false, currentTerm, fmt.Errorf("failed to set current term: %w", err)
 	}
 	currentTerm = req.Term
 	slog.InfoContext(r.ctx, "appending entries to log")
 	if err := r.appendLogs(req.Entries); err != nil {
-		return false, currentTerm, errors.New("failed to append logs: " + err.Error())
+		return false, currentTerm, fmt.Errorf("failed to append logs: %w", err)
 	}
 	// (§5.3)
 	slog.InfoContext(r.ctx, "getting count log")
 	logCount, err := r.logCount()
 	if err != nil {
-		return false, currentTerm, errors.New("failed to count logs: " + err.Error())
+		return false, currentTerm, fmt.Errorf("failed to count logs: %w", err)
 	}
 	slog.InfoContext(r.ctx, fmt.Sprintf("log count is: %d", logCount))
 	if req.PrevLogIndex > logCount {
@@ -60,19 +59,19 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	}
 
 	if err := r.appendLogs(req.Entries); err != nil {
-		return false, currentTerm, errors.New("failed to append logs: " + err.Error())
+		return false, currentTerm, fmt.Errorf("failed to append logs: %w", err)
 	}
 
 	slog.InfoContext(r.ctx, "ranging through request entries")
 	for _, entry := range req.Entries {
 		slog.InfoContext(r.ctx, fmt.Sprintf("executing log on keyvalue state machine: (%s) | %s -> %s", entry.Action, entry.Key, entry.Value))
 		if err := r.KeyVal.Exec(KeyValAction(entry.Action), entry.Key, entry.Value); err != nil {
-			return false, currentTerm, errors.New("failed to exec operation on keyVal store: " + err.Error())
+			return false, currentTerm, fmt.Errorf("failed to exec operation on keyVal store: %w", err)
 		}
 	}
 
 	if err := r.setLeaderID(req.LeaderID); err != nil {
-		return false, currentTerm, errors.New("failed to set leader id: " + err.Error())
+		return false, currentTerm, fmt.Errorf("failed to set leader id: %w", err)
 	}
 
 	slog.InfoContext(r.ctx, "replying true")
@@ -99,22 +98,22 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 	if req.Term > currentTerm {
 		currentTerm = req.Term
 		if err := r.setCurrentTerm(currentTerm); err != nil {
-			return currentTerm, false, errors.New("failed to set current term: " + err.Error())
+			return currentTerm, false, fmt.Errorf("failed to set current term: %w", err)
 		}
 	}
 	votedFor, err := r.votedFor()
 	if err != nil {
-		return -1, false, errors.New("failed to get voted for: " + err.Error())
+		return -1, false, fmt.Errorf("failed to get voted for: %w", err)
 	}
 	slog.InfoContext(r.ctx, fmt.Sprintf("request voted - voted for: %d", votedFor))
 
 	lastLogIndex, err := r.prevLogIndex()
 	if err != nil {
-		return currentTerm, false, errors.New("failed to get last log index: " + err.Error())
+		return currentTerm, false, fmt.Errorf("failed to get last log index: %w", err)
 	}
 	lastLogTerm, err := r.prevLogTerm()
 	if err != nil {
-		return currentTerm, false, errors.New("failed to get last log term: " + err.Error())
+		return currentTerm, false, fmt.Errorf("failed to get last log term: %w", err)
 	}
 
 	if votedFor < 0 || votedFor == req.CandidateID {

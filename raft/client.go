@@ -210,7 +210,7 @@ func (g *grpcClient) AppendEntries(peer Peer, req AppendEntriesRequest) (bool, i
 	}
 	r, err := (*client).AppendEntries(context.TODO(), &rar)
 	if err != nil {
-		return false, -1, errors.New("failed to send append entries: " + err.Error())
+		return false, -1, fmt.Errorf("failed to send append entries: %w", err)
 	}
 	if r == nil {
 		return false, -1, errors.New("nil response from append entries")

@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -53,7 +54,7 @@ func (d *SQLite) migrate() error {
 
 	for _, migration := range migrations {
 		if _, err := d.db.Exec(migration); err != nil {
-			return errors.New("failed to apply migration: " + err.Error())
+			return fmt.Errorf("failed to apply migration: %w", err)
 		}
 	}
 	return nil
@@ -122,7 +123,7 @@ func (d *SQLite) DeleteLogsFromIndex(idx int) (err error) {
 
 	_, err = d.db.Exec(query, idx)
 	if err != nil {
-		return errors.New("failed to delete logs from index: " + err.Error())
+		return fmt.Errorf("failed to delete logs from index: %w", err)
 	}
 
 	return nil
