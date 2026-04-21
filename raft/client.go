@@ -195,6 +195,8 @@ func (g *grpcClient) AppendEntries(peer Peer, req AppendEntriesRequest) (bool, i
 			return false, -1, fmt.Errorf("invalid action in log entry: %w", err)
 		}
 		re := proto.LogEntry{
+			Term:   int32(entry.Term),
+			Index:  int32(entry.Index),
 			Action: proto.Action(action),
 			Key:    entry.Key,
 			Value:  entry.Value,
