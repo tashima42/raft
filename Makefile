@@ -18,9 +18,6 @@ build: download
 test:
 	go test -v -race ./...
 
-watch:
-	air
-
 .PHONY: proto
 proto:
 	protoc --proto_path=$(PROTO_DIR) \
