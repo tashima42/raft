@@ -11,6 +11,7 @@ type Database interface {
 	SetRaftValue(key, value string) error
 	GetRaftValue(key string) (string, error)
 	AppendLogs(logs []LogEntry) error
+	DeleteLogsFromIndex(idx int) error
 	GetLogs() ([]LogEntry, error)
 	GetLog(idx int) (LogEntry, error)
 	CountLogs() (int, error)
@@ -60,6 +61,11 @@ func (m *MockDB) GetRaftValue(key string) (string, error) {
 
 func (m *MockDB) AppendLogs(logs []LogEntry) error {
 	m.logs = append(m.logs, logs...)
+	return nil
+}
+
+func (m *MockDB) DeleteLogsFromIndex(idx int) error {
+	m.logs = m.logs[:idx]
 	return nil
 }
 

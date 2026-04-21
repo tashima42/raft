@@ -117,6 +117,17 @@ func (d *SQLite) AppendLogs(logs []LogEntry) (err error) {
 	return err
 }
 
+func (d *SQLite) DeleteLogsFromIndex(idx int) (err error) {
+	query := "DELETE FROM logs WHERE idx > ?"
+
+	_, err = d.db.Exec(query, idx)
+	if err != nil {
+		return errors.New("failed to delete logs from index: " + err.Error())
+	}
+
+	return nil
+}
+
 func (d *SQLite) GetLogs() (logs []LogEntry, err error) {
 	rows, err := d.db.Query("SELECT action, term, key, value, idx FROM logs;")
 	if err != nil {

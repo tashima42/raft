@@ -111,7 +111,10 @@ func handleSetKeyValue(r *raft.Raft) http.HandlerFunc {
 			return
 		}
 
-		r.KeyVal.Set(setKeyBody.Key, setKeyBody.Value)
+		if err := r.AddToLog(raft.SetAction, setKeyBody.Key, setKeyBody.Value); err != nil {
+			http.Error(w, "failed to set key-value: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		res := responseBody{Success: true}
 

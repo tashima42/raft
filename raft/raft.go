@@ -14,6 +14,8 @@ import (
 	"github.com/tashima42/raft/database"
 )
 
+var ErrQuorumNotReached = errors.New("quorum not reached")
+
 type RaftState int
 
 const (
@@ -189,6 +191,38 @@ func (r *Raft) LeaderAddress() (string, error) {
 	return leader.Address(), nil
 }
 
+func (r *Raft) AddToLog(action KeyValAction, key, value string) error {
+	prevLogIndex, err := r.prevLogIndex()
+	if err != nil {
+		return errors.New("failed to get previous log index: " + err.Error())
+	}
+	term, err := r.currentTerm()
+	if err != nil {
+		return errors.New("failed to get current term: " + err.Error())
+	}
+	entry := database.LogEntry{Index: prevLogIndex + 1, Term: term, Action: string(action), Key: key, Value: value}
+	if err := r.appendLogs([]database.LogEntry{entry}); err != nil {
+		return errors.New("failed to append log: " + err.Error())
+	}
+	if err := r.sendAppendEntries([]database.LogEntry{entry}, true); err != nil {
+		if errors.Is(err, ErrQuorumNotReached) {
+			// entry
+			slog.InfoContext(r.ctx, "quorum not reached for log entry, removing log entry and returning error")
+			if err := r.deleteLogsFromIndex(prevLogIndex + 1); err != nil {
+				return errors.New("failed to delete log entry after quorum not reached: " + err.Error())
+			}
+		}
+		return errors.New("failed to send append entries: " + err.Error())
+	}
+	if err := r.setPrevLogIndex(prevLogIndex + 1); err != nil {
+		return errors.New("failed to set previous log index: " + err.Error())
+	}
+	if err := r.setLeaderCommit(prevLogIndex + 1); err != nil {
+		return errors.New("failed to set leader commit: " + err.Error())
+	}
+	return r.KeyVal.Exec(KeyValAction(action), key, value)
+}
+
 // AppendEntries receives entries from the leader and checks if they are valid
 // and returns a bool for success or error, the current term and an error
 func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
@@ -242,6 +276,10 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		return false, currentTerm, nil
 	}
 
+	if err := r.appendLogs(req.Entries); err != nil {
+		return false, currentTerm, errors.New("failed to append logs: " + err.Error())
+	}
+
 	slog.InfoContext(r.ctx, "ranging through request entries")
 	for _, entry := range req.Entries {
 		slog.InfoContext(r.ctx, fmt.Sprintf("executing log on keyvalue state machine: (%s) | %s -> %s", entry.Action, entry.Key, entry.Value))
@@ -290,11 +328,14 @@ func (r *Raft) leaderState() error {
 			return nil
 		}
 		slog.InfoContext(r.ctx, "sending heartbeats to peers")
-		if err := r.sendHeartBeats(); err != nil {
-			return err
+
+		if time.Since(r.heartbeatResetTime) >= r.heartbeatTimeout {
+			if err := r.sendHeartBeats(); err != nil {
+				return err
+			}
+			return nil
 		}
 	}
-
 	return nil
 }
 
@@ -327,11 +368,19 @@ func (r *Raft) candidateState() error {
 }
 
 func (r *Raft) sendHeartBeats() error {
-	// TODO: only send heartbeats when there are no other append entries requests
+	return r.sendAppendEntries([]database.LogEntry{}, false)
+}
 
-	slog.InfoContext(r.ctx, "locking mutex before sending heartbeats to peers")
+func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.State != StateLeader {
+		slog.InfoContext(r.ctx, "not in leader state, cannot send append entries")
+		return errors.New("cannot send append entries when not in leader state")
+	}
+
+	r.heartbeatResetTime = time.Now()
 
 	currentTerm, err := r.currentTerm()
 	if err != nil {
@@ -349,10 +398,20 @@ func (r *Raft) sendHeartBeats() error {
 	if err != nil {
 		return errors.New("failed to get leader commit: " + err.Error())
 	}
-	slog.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
+
+	quorum := 1 + ((len(r.peers) + 1) / 2)
+	totalSuccess := 1
+
 	for _, peer := range r.peers {
-		slog.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d", peer.ID()))
-		appendEntriesReq := AppendEntriesRequest{Term: currentTerm, LeaderID: r.id, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, Entries: []database.LogEntry{}, LeaderCommit: leaderCommit}
+		slog.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d: %s", peer.ID(), peer.Address()))
+		appendEntriesReq := AppendEntriesRequest{
+			Term:         currentTerm,
+			LeaderID:     r.id,
+			PrevLogIndex: prevLogIndex,
+			PrevLogTerm:  prevLogTerm,
+			Entries:      entries,
+			LeaderCommit: leaderCommit,
+		}
 		slog.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
 		success, term, err := r.Client.AppendEntries(*peer, appendEntriesReq)
 		if err != nil {
@@ -363,13 +422,16 @@ func (r *Raft) sendHeartBeats() error {
 			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
 			// TODO: implement retries
 		}
+		totalSuccess += 1
 		if term > currentTerm {
 			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
 			r.State = StateFollower
 			return nil
 		}
 	}
-
+	if checkQuorum && totalSuccess < quorum {
+		return ErrQuorumNotReached
+	}
 	return nil
 }
 
