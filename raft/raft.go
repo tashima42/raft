@@ -45,6 +45,7 @@ type Raft struct {
 	electionResetTime  time.Time
 	heartbeatResetTime time.Time
 	KeyVal             keyVal
+	lastApplied        int
 	State              RaftState
 	ctx                context.Context
 }
@@ -67,6 +68,7 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 		heartbeatTimeout:   heartbeatTimeout,
 		electionResetTime:  time.Now(),
 		heartbeatResetTime: time.Now(),
+		lastApplied:        -1,
 		KeyVal:             newKeyVal(),
 		State:              StateFollower,
 	}
@@ -144,6 +146,8 @@ func (r *Raft) GracefullyShutDown() error {
 
 func (r *Raft) initLog() error {
 	slog.InfoContext(r.ctx, "initiating log")
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	logs, err := r.logs()
 	if err != nil {
 		return errors.New("failed to get logs: " + err.Error())
@@ -159,6 +163,7 @@ func (r *Raft) initLog() error {
 		if err := r.KeyVal.Exec(KeyValAction(log.Action), log.Key, log.Value); err != nil {
 			return errors.New("failed to exec operation on keyVal store: " + err.Error())
 		}
+		r.lastApplied = log.Index
 	}
 	return nil
 }
