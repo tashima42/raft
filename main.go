@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +20,10 @@ import (
 	"time"
 
 	"github.com/tashima42/raft/database"
+	"github.com/tashima42/raft/proto"
 	"github.com/tashima42/raft/raft"
+	"github.com/tashima42/raft/transport"
+	"google.golang.org/grpc"
 )
 
 var Version = "dev"
@@ -35,7 +39,7 @@ func main() {
 func run(ctx context.Context, w io.Writer, version string) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
 
-	peersIDs, peersAddresses, port, id, dbLocation, err := parseFlags()
+	peersIDs, peersAddresses, port, apiPort, id, dbLocation, err := parseFlags()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
@@ -51,7 +55,12 @@ func run(ctx context.Context, w io.Writer, version string) error {
 		return errors.New("failed to start raft: " + err.Error())
 	}
 
-	r, err := raft.NewRaft(ctx, db, raft.NewHTTPClient(http.Client{Timeout: time.Second * 10}), id, peers)
+	grpcClient, err := raft.NewGRPCClient(peers)
+	if err != nil {
+		return fmt.Errorf("failed to start grpcClient: %w", err)
+	}
+
+	r, err := raft.NewRaft(ctx, db, grpcClient, id, peers)
 	if err != nil {
 		return errors.New("failed to start raft: " + err.Error())
 	}
@@ -60,16 +69,32 @@ func run(ctx context.Context, w io.Writer, version string) error {
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
-	server := &http.Server{
-		Addr:              fmt.Sprintf(":%d", port),
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("failed to start tcp server on port: %w", err)
+	}
+	s := grpc.NewServer()
+	grpcServer := &transport.GRPCServer{Raft: r}
+	proto.RegisterRaftServer(s, grpcServer)
+
+	httpServer := &http.Server{
+		Addr:              fmt.Sprintf(":%d", apiPort),
 		Handler:           route(slog.Default(), version, r),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	errChan := make(chan error, 1)
+
 	go func() {
-		slog.InfoContext(ctx, "server started", slog.Uint64("port", uint64(port)), slog.String("version", version))
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.InfoContext(ctx, "grpc server started", slog.Uint64("port", uint64(port)), slog.String("version", version))
+		if err := s.Serve(lis); err != nil {
+			errChan <- fmt.Errorf("grpc server: %w", err)
+		}
+	}()
+
+	go func() {
+		slog.InfoContext(ctx, "server started", slog.Uint64("port", uint64(apiPort)), slog.String("version", version))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
@@ -89,7 +114,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 		defer shutdownCancel()
 
 		// Shutdown the HTTP server first
-		if err := server.Shutdown(ctx); err != nil {
+		if err := httpServer.Shutdown(ctx); err != nil {
 			return fmt.Errorf("server shutdown: %w", err)
 		}
 
@@ -100,8 +125,9 @@ func run(ctx context.Context, w io.Writer, version string) error {
 }
 
 // parseFlags returns peersIDs, peersAddresses, port, id, dbLocation, error
-func parseFlags() ([]int, []string, int, int, string, error) {
-	port := flag.Int("port", 6437, "port to run http server on")
+func parseFlags() ([]int, []string, int, int, int, string, error) {
+	port := flag.Int("port", 6437, "port to run grpc server on")
+	apiPort := flag.Int("api-port", 5437, "port to run http server on")
 	sid := flag.Int("id", 1, "raft server id")
 	peersIDsStr := flag.String("peers-ids", "", "comma separated ids. E.g: 1,2,3")
 	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: http://localhost:6438,http://localhost:6439")
@@ -109,23 +135,26 @@ func parseFlags() ([]int, []string, int, int, string, error) {
 	flag.Parse()
 
 	if port == nil {
-		return nil, nil, -1, -1, "", errors.New("empty port")
+		return nil, nil, -1, -1, -1, "", errors.New("empty port")
+	}
+	if apiPort == nil {
+		return nil, nil, -1, -1, -1, "", errors.New("empty api port")
 	}
 	if sid == nil {
-		return nil, nil, -1, -1, "", errors.New("empty id")
+		return nil, nil, -1, -1, -1, "", errors.New("empty id")
 	}
 	if peersIDsStr == nil {
-		return nil, nil, -1, -1, "", errors.New("empty peers ids")
+		return nil, nil, -1, -1, -1, "", errors.New("empty peers ids")
 	}
 	if peersAddressesStr == nil {
-		return nil, nil, -1, -1, "", errors.New("empty peers addresses")
+		return nil, nil, -1, -1, -1, "", errors.New("empty peers addresses")
 	}
 
 	pis := strings.Split(*peersIDsStr, ",")
 	ads := strings.Split(*peersAddressesStr, ",")
 
 	if len(pis) != len(ads) {
-		return nil, nil, -1, -1, "", errors.New("peers ids and perrs addresses have different lengths")
+		return nil, nil, -1, -1, -1, "", errors.New("peers ids and perrs addresses have different lengths")
 	}
 
 	ids := make([]int, len(pis))
@@ -133,12 +162,12 @@ func parseFlags() ([]int, []string, int, int, string, error) {
 	for i, pid := range pis {
 		id, err := strconv.Atoi(pid)
 		if err != nil {
-			return nil, nil, -1, -1, "", err
+			return nil, nil, -1, -1, -1, "", err
 		}
 		ids[i] = id
 	}
 
-	return ids, ads, *port, *sid, *dbLocation, nil
+	return ids, ads, *port, *apiPort, *sid, *dbLocation, nil
 }
 
 // route sets up and returns an [http.Handler] for all the server routes.
@@ -148,8 +177,8 @@ func route(log *slog.Logger, version string, r *raft.Raft) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /health", handleGetHealth(version))
-	mux.HandleFunc("POST /entries", handleAppendEntries(r))
-	mux.HandleFunc("POST /request-vote", handleRequestVote(r))
+	// mux.HandleFunc("POST /entries", handleAppendEntries(r))
+	// mux.HandleFunc("POST /request-vote", handleRequestVote(r))
 
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("GET /api/key/{key}", handleGetKeyValue(r))

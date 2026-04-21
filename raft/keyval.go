@@ -44,3 +44,23 @@ func (k *keyVal) Get(key string) string {
 func (k *keyVal) Delete(key string) {
 	k.Store[key] = ""
 }
+
+func KeyValActionAtoi(k KeyValAction) (int, error) {
+	switch k {
+	case SetAction:
+		return 0, nil
+	case DeleteAction:
+		return 1, nil
+	}
+	return -1, errors.New("invalid action")
+}
+
+func KeyValActionItoa(i int) (KeyValAction, error) {
+	switch i {
+	case 0:
+		return SetAction, nil
+	case 1:
+		return DeleteAction, nil
+	}
+	return SetAction, errors.New("invalid action index")
+}

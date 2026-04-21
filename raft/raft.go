@@ -143,7 +143,10 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 
 func (r *Raft) GracefullyShutDown() error {
 	slog.InfoContext(r.ctx, "gracefully shutting down and closing database")
-	return r.db.Close()
+	if err := r.db.Close(); err != nil {
+		return err
+	}
+	return r.Client.Close()
 }
 
 func (r *Raft) initLog() error {
