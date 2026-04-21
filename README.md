@@ -2,6 +2,27 @@
 
 This is an implementation of the Raft protocol described on [raft.github.io](raft.github.io)
 
+## Testing
+
+Integration and e2e tests:
+
+```
+make test
+```
+
+Manual testing:
+
+```
+make build && ./scripts/test.sh
+```
+
+```
+curl -vL -X PUT http://localhost:5439/api/key -H 'content-type: application/json' -d '{"key": "country", "value": "Brasil"}'
+curl -vL http://localhost:5439/api/key/country
+```
+
+## Package: main
+
 * `main.go`: Is the entry point of the application, it parses the command line
 arguments and initializes the Raft server, the gRPC server and the HTTP server
 for the key-value store.
