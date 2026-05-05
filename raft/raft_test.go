@@ -131,5 +131,5 @@ func mockRaft() (*Raft, error) {
 		NewPeer(1, "local:1", "local:1"),
 		NewPeer(2, "local:2", "local:2"),
 	}
-	return NewRaft(context.TODO(), mockDB, NewMockClient(nil), id, peers)
+	return NewRaft(context.TODO(), mockDB, NewMockClient(nil), id, peers, 0)
 }

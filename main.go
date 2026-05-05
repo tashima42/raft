@@ -26,6 +26,17 @@ import (
 	"google.golang.org/grpc"
 )
 
+type ServerConfig struct {
+	Port                          int
+	APIPort                       int
+	ServerID                      int
+	PeersIDs                      []int
+	PeersAddresses                []string
+	PeersAPIAddresses             []string
+	DBLocation                    string
+	InitializationCooldownSeconds int
+}
+
 var Version = "dev"
 
 // https://github.com/raeperd/kickstart.go/blob/main/main.go
@@ -39,18 +50,18 @@ func main() {
 func run(ctx context.Context, w io.Writer, version string) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
 
-	peersIDs, peersAddresses, peersAPIAddresses, port, apiPort, id, dbLocation, err := parseFlags()
+	serverConfig, err := parseFlags()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 
-	peers := make([]*raft.Peer, len(peersIDs))
+	peers := make([]*raft.Peer, len(serverConfig.PeersIDs))
 
-	for i, id := range peersIDs {
-		peers[i] = raft.NewPeer(id, peersAddresses[i], peersAPIAddresses[i])
+	for i, id := range serverConfig.PeersIDs {
+		peers[i] = raft.NewPeer(id, serverConfig.PeersAddresses[i], serverConfig.PeersAddresses[i])
 	}
 
-	db, err := database.NewSQLite(dbLocation)
+	db, err := database.NewSQLite(serverConfig.DBLocation)
 	if err != nil {
 		return fmt.Errorf("failed to start raft: %w", err)
 	}
@@ -60,7 +71,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 		return fmt.Errorf("failed to start grpcClient: %w", err)
 	}
 
-	r, err := raft.NewRaft(ctx, db, grpcClient, id, peers)
+	r, err := raft.NewRaft(ctx, db, grpcClient, serverConfig.ServerID, peers, serverConfig.InitializationCooldownSeconds)
 	if err != nil {
 		return fmt.Errorf("failed to start raft: %w", err)
 	}
@@ -69,7 +80,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", serverConfig.Port))
 	if err != nil {
 		return fmt.Errorf("failed to start tcp server on port: %w", err)
 	}
@@ -78,7 +89,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 	proto.RegisterRaftServer(s, grpcServer)
 
 	httpServer := &http.Server{
-		Addr:              fmt.Sprintf(":%d", apiPort),
+		Addr:              fmt.Sprintf(":%d", serverConfig.APIPort),
 		Handler:           route(slog.Default(), version, r),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -86,14 +97,14 @@ func run(ctx context.Context, w io.Writer, version string) error {
 	errChan := make(chan error, 1)
 
 	go func() {
-		slog.InfoContext(ctx, "grpc server started", slog.Uint64("port", uint64(port)), slog.String("version", version))
+		slog.InfoContext(ctx, "grpc server started", slog.Uint64("port", uint64(serverConfig.Port)), slog.String("version", version))
 		if err := s.Serve(lis); err != nil {
 			errChan <- fmt.Errorf("grpc server: %w", err)
 		}
 	}()
 
 	go func() {
-		slog.InfoContext(ctx, "server started", slog.Uint64("port", uint64(apiPort)), slog.String("version", version))
+		slog.InfoContext(ctx, "server started", slog.Uint64("port", uint64(serverConfig.APIPort)), slog.String("version", version))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
@@ -125,7 +136,7 @@ func run(ctx context.Context, w io.Writer, version string) error {
 }
 
 // parseFlags returns peersIDs, peersAddresses, port, id, dbLocation, error
-func parseFlags() ([]int, []string, []string, int, int, int, string, error) {
+func parseFlags() (ServerConfig, error) {
 	port := flag.Int("port", 6437, "port to run grpc server on")
 	apiPort := flag.Int("api-port", 5437, "port to run http server on")
 	sid := flag.Int("id", 1, "raft server id")
@@ -133,25 +144,30 @@ func parseFlags() ([]int, []string, []string, int, int, int, string, error) {
 	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: localhost:6438,localhost:6439")
 	peersAPIAddressesStr := flag.String("peers-api-addresses", "", "comma separated addresses. e.g: http://localhost:5438,http://localhost:5439")
 	dbLocation := flag.String("db-location", "raft.db", "db location. e.g: raft-1.db")
+	initializationCooldownSeconds := flag.Int("initilization-cooldown", 5, "delay before starting the clusters")
 	flag.Parse()
 
 	if port == nil {
-		return nil, nil, nil, -1, -1, -1, "", errors.New("empty port")
+		return ServerConfig{}, errors.New("empty port")
 	}
 	if apiPort == nil {
-		return nil, nil, nil, -1, -1, -1, "", errors.New("empty api port")
+		return ServerConfig{}, errors.New("empty api port")
 	}
 	if sid == nil {
-		return nil, nil, nil, -1, -1, -1, "", errors.New("empty id")
+		return ServerConfig{}, errors.New("empty id")
 	}
 	if peersIDsStr == nil {
-		return nil, nil, nil, -1, -1, -1, "", errors.New("empty peers ids")
+		return ServerConfig{}, errors.New("empty peers ids")
 	}
 	if peersAddressesStr == nil {
-		return nil, nil, nil, -1, -1, -1, "", errors.New("empty peers addresses")
+		return ServerConfig{}, errors.New("empty peers addresses")
 	}
 	if peersAPIAddressesStr == nil {
-		return nil, nil, nil, -1, -1, -1, "", errors.New("empty peers api addresses")
+		return ServerConfig{}, errors.New("empty peers api addresses")
+	}
+
+	if initializationCooldownSeconds == nil {
+		return ServerConfig{}, errors.New("empty initilization cooldown")
 	}
 
 	pis := strings.Split(*peersIDsStr, ",")
@@ -159,7 +175,7 @@ func parseFlags() ([]int, []string, []string, int, int, int, string, error) {
 	apids := strings.Split(*peersAPIAddressesStr, ",")
 
 	if len(pis) != len(ads) || len(ads) != len(apids) {
-		return nil, nil, nil, -1, -1, -1, "", errors.New("peers ids and peers addresses or peers api addresses have different lengths")
+		return ServerConfig{}, errors.New("peers ids and peers addresses or peers api addresses have different lengths")
 	}
 
 	ids := make([]int, len(pis))
@@ -167,12 +183,21 @@ func parseFlags() ([]int, []string, []string, int, int, int, string, error) {
 	for i, pid := range pis {
 		id, err := strconv.Atoi(pid)
 		if err != nil {
-			return nil, nil, nil, -1, -1, -1, "", err
+			return ServerConfig{}, err
 		}
 		ids[i] = id
 	}
 
-	return ids, ads, apids, *port, *apiPort, *sid, *dbLocation, nil
+	return ServerConfig{
+		ServerID:                      *sid,
+		PeersIDs:                      ids,
+		PeersAddresses:                ads,
+		PeersAPIAddresses:             apids,
+		Port:                          *port,
+		APIPort:                       *apiPort,
+		DBLocation:                    *dbLocation,
+		InitializationCooldownSeconds: *initializationCooldownSeconds,
+	}, nil
 }
 
 // route sets up and returns an [http.Handler] for all the server routes.

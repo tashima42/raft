@@ -37,7 +37,7 @@ func newTestCluster(t *testing.T, size int) *testCluster {
 			peers = append(peers, NewPeer(peerID, addresses[peerID], addresses[peerID]))
 		}
 
-		node, err := NewRaft(context.Background(), database.NewMockDB(), NewMockClient(nil), id, peers)
+		node, err := NewRaft(context.Background(), database.NewMockDB(), NewMockClient(nil), id, peers, 0)
 		if err != nil {
 			t.Fatalf("failed to create raft node %d: %v", id, err)
 		}

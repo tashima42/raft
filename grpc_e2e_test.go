@@ -70,7 +70,7 @@ func newE2ECluster(t *testing.T, size int) *e2eCluster {
 			t.Fatalf("failed to create grpc client for node %d: %v", n.id, err)
 		}
 
-		r, err := raft.NewRaft(context.Background(), db, client, n.id, peers)
+		r, err := raft.NewRaft(context.Background(), db, client, n.id, peers, 0)
 		if err != nil {
 			t.Fatalf("failed to create raft node %d: %v", n.id, err)
 		}
@@ -202,8 +202,8 @@ func setNodeTermBySelfVote(t *testing.T, n *e2eNode, term int) {
 	}
 }
 
-func TestGRPCE2E3NodesElectionAndAppend(t *testing.T) {
-	cluster := newE2ECluster(t, 3)
+func TestGRPCE2E4NodesElectionAndAppend(t *testing.T) {
+	cluster := newE2ECluster(t, 4)
 
 	candidate := cluster.nodeByID(1)
 	candidate.raft.State = raft.StateCandidate

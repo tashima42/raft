@@ -36,39 +36,41 @@ func (s RaftState) String() string {
 }
 
 type Raft struct {
-	id                 int
-	peers              []*Peer
-	db                 database.Database
-	Client             Client
-	mu                 *sync.Mutex
-	electionTimeout    time.Duration
-	heartbeatTimeout   time.Duration
-	electionResetTime  time.Time
-	heartbeatResetTime time.Time
-	KeyVal             keyVal
-	lastApplied        int
-	State              RaftState
-	ctx                context.Context
+	id                     int
+	peers                  []*Peer
+	db                     database.Database
+	Client                 Client
+	mu                     *sync.Mutex
+	initializationCooldown time.Duration
+	electionTimeout        time.Duration
+	heartbeatTimeout       time.Duration
+	electionResetTime      time.Time
+	heartbeatResetTime     time.Time
+	KeyVal                 keyVal
+	lastApplied            int
+	State                  RaftState
+	ctx                    context.Context
 }
 
 var heartbeatTimeout time.Duration = time.Millisecond * 100
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
-func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer) (*Raft, error) {
+func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int) (*Raft, error) {
 	slog.InfoContext(ctx, "creating a new raft instance")
 	raft := &Raft{
-		ctx:                ctx,
-		id:                 id,
-		peers:              peers,
-		db:                 db,
-		Client:             client,
-		mu:                 &sync.Mutex{},
-		heartbeatTimeout:   heartbeatTimeout,
-		electionResetTime:  time.Now(),
-		heartbeatResetTime: time.Now(),
-		lastApplied:        -1,
-		KeyVal:             newKeyVal(),
-		State:              StateFollower,
+		ctx:                    ctx,
+		id:                     id,
+		peers:                  peers,
+		db:                     db,
+		Client:                 client,
+		mu:                     &sync.Mutex{},
+		initializationCooldown: time.Duration(initializationCooldownSecs) * time.Second,
+		heartbeatTimeout:       heartbeatTimeout,
+		electionResetTime:      time.Now(),
+		heartbeatResetTime:     time.Now(),
+		lastApplied:            -1,
+		KeyVal:                 newKeyVal(),
+		State:                  StateFollower,
 	}
 
 	raft.resetElectionTimeout()
@@ -235,6 +237,10 @@ func (r *Raft) AddToLog(action KeyValAction, key, value string) error {
 // based on the current state.
 func (r *Raft) Run() {
 	slog.InfoContext(r.ctx, "running raft")
+	slog.InfoContext(r.ctx, "waiting for initilizaition cooldown")
+
+	time.Sleep(r.initializationCooldown)
+
 	slog.InfoContext(r.ctx, "starting election timer")
 	go r.electionTimer()
 	runTicker := time.NewTicker(10 * time.Millisecond).C
