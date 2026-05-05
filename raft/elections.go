@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -8,7 +9,7 @@ import (
 )
 
 var (
-	minimumElectionTimeoutMS int64 = 300
+	minimumElectionTimeoutMS int64 = 3000
 	maximumElectionTimeoutMS int64 = 2 * minimumElectionTimeoutMS
 )
 
@@ -69,11 +70,15 @@ func (r *Raft) requestVotes() error {
 	for _, peer := range r.peers {
 		slog.InfoContext(r.ctx, "requesting vote from: "+peer.Address())
 		// TODO: implement last log
-		peerTerm, voteGranted, err := r.Client.RequestVote(*peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
+		tCtx, cancel := context.WithTimeout(r.ctx, time.Second*1)
+		defer cancel()
+		peerTerm, voteGranted, err := r.Client.RequestVote(tCtx, *peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
 		if err != nil {
-			return err
+			slog.ErrorContext(r.ctx, "failed to get response from request vote: "+err.Error())
+			peerTerm = -1
+			voteGranted = false
 		}
-		slog.InfoContext(r.ctx, fmt.Sprintf("requeste vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
+		slog.InfoContext(r.ctx, fmt.Sprintf("request vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
 		if peerTerm > currentTerm {
 			slog.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
 			// TODO: set leader

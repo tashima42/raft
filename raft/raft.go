@@ -52,7 +52,7 @@ type Raft struct {
 	ctx                    context.Context
 }
 
-var heartbeatTimeout time.Duration = time.Millisecond * 100
+var heartbeatTimeout time.Duration = time.Millisecond * 1000
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
 func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int) (*Raft, error) {
@@ -334,14 +334,19 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 			LeaderCommit: leaderCommit,
 		}
 		slog.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
-		success, term, err := r.Client.AppendEntries(*peer, appendEntriesReq)
+		tCtx, cancel := context.WithTimeout(r.ctx, time.Second*1)
+		defer cancel()
+		success, term, err := r.Client.AppendEntries(tCtx, *peer, appendEntriesReq)
 		if err != nil {
-			return fmt.Errorf("failed to send append entries request to peer: %w", err)
+			slog.ErrorContext(r.ctx, "failed to send append entries request to peer: "+err.Error())
+			success = false
+			term = -1
 		}
 		slog.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
 		if !success {
 			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
 			// TODO: implement retries
+			continue
 		}
 		totalSuccess += 1
 		if term > currentTerm {

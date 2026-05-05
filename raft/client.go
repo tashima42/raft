@@ -1,12 +1,9 @@
 package raft
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/tashima42/raft/database"
 	"github.com/tashima42/raft/proto"
@@ -16,19 +13,11 @@ import (
 
 type Client interface {
 	// AppendEntries sends entries from the leader to a peer and returns if it was successful, the peer's term and an error
-	AppendEntries(peer Peer, req AppendEntriesRequest) (bool, int, error)
+	AppendEntries(ctx context.Context, peer Peer, req AppendEntriesRequest) (bool, int, error)
 	// RequestVote communicates with a peer requesting a vote and returns the peer's term, if the vote was granted and an error
-	RequestVote(peer Peer, req RequestVoteRequest) (int, bool, error)
+	RequestVote(ctx context.Context, peer Peer, req RequestVoteRequest) (int, bool, error)
 	// Close closes all open connections with clients
 	Close() error
-}
-
-type mockClient struct {
-	Peers map[int]*Raft
-}
-
-type httpClient struct {
-	client http.Client
 }
 
 type grpcClient struct {
@@ -84,102 +73,7 @@ type RequestVoteResponse struct {
 	VoteGranted bool `json:"voteGranted"`
 }
 
-func NewHTTPClient(c http.Client) *httpClient {
-	return &httpClient{
-		client: c,
-	}
-}
-
-func (h *httpClient) AppendEntries(peer Peer, req AppendEntriesRequest) (success bool, term int, err error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return false, -1, err
-	}
-
-	r, err := http.NewRequest(http.MethodPost, peer.Address()+"/entries", bytes.NewBuffer(body))
-	if err != nil {
-		return false, -1, err
-	}
-	res, err := h.client.Do(r)
-	if err != nil {
-		return false, -1, err
-	}
-	defer func() {
-		if closeErr := errors.Join(res.Body.Close()); closeErr != nil {
-			err = errors.Join(err, closeErr)
-		}
-	}()
-
-	decoder := json.NewDecoder(res.Body)
-
-	resBody := AppendEntriesResponse{}
-	err = decoder.Decode(&resBody)
-
-	return resBody.Success, resBody.Term, err
-}
-
-func (h *httpClient) RequestVote(peer Peer, req RequestVoteRequest) (term int, voteGranted bool, err error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return -1, false, err
-	}
-
-	r, err := http.NewRequest(http.MethodPost, peer.Address()+"/request-vote", bytes.NewBuffer(body))
-	if err != nil {
-		return -1, false, err
-	}
-
-	res, err := h.client.Do(r)
-	if err != nil {
-		return -1, false, err
-	}
-	defer func() {
-		if closeErr := errors.Join(res.Body.Close()); closeErr != nil {
-			err = errors.Join(err, closeErr)
-		}
-	}()
-
-	decoder := json.NewDecoder(res.Body)
-
-	resBody := RequestVoteResponse{}
-	err = decoder.Decode(&resBody)
-
-	return resBody.Term, resBody.VoteGranted, err
-}
-
-func (h *httpClient) Close() error {
-	return nil
-}
-
-func NewMockClient(peers map[int]*Raft) *mockClient {
-	return &mockClient{
-		Peers: peers,
-	}
-}
-
-func (m *mockClient) AppendEntries(peer Peer, req AppendEntriesRequest) (bool, int, error) {
-	raft, exists := m.Peers[peer.ID()]
-	if !exists {
-		return false, -1, fmt.Errorf("peer not found, id: %d", peer.ID())
-	}
-
-	return raft.AppendEntries(req)
-}
-
-func (m *mockClient) RequestVote(peer Peer, req RequestVoteRequest) (int, bool, error) {
-	raft, exists := m.Peers[peer.ID()]
-	if !exists {
-		return -1, false, fmt.Errorf("peer not found, id: %d", peer.ID())
-	}
-
-	return raft.RequestVote(req)
-}
-
-func (m *mockClient) Close() error {
-	return nil
-}
-
-func (g *grpcClient) AppendEntries(peer Peer, req AppendEntriesRequest) (bool, int, error) {
+func (g *grpcClient) AppendEntries(ctx context.Context, peer Peer, req AppendEntriesRequest) (bool, int, error) {
 	rar := proto.AppendEntriesRequest{
 		Term:         int32(req.Term),
 		LeaderID:     int32(req.LeaderID),
@@ -208,7 +102,7 @@ func (g *grpcClient) AppendEntries(peer Peer, req AppendEntriesRequest) (bool, i
 	if client == nil {
 		return false, -1, fmt.Errorf("client not found for peer id: %d", peer.ID())
 	}
-	r, err := (*client).AppendEntries(context.TODO(), &rar)
+	r, err := (*client).AppendEntries(ctx, &rar)
 	if err != nil {
 		return false, -1, fmt.Errorf("failed to send append entries: %w", err)
 	}
@@ -218,7 +112,7 @@ func (g *grpcClient) AppendEntries(peer Peer, req AppendEntriesRequest) (bool, i
 	return r.Success, int(r.Term), nil
 }
 
-func (g *grpcClient) RequestVote(peer Peer, req RequestVoteRequest) (int, bool, error) {
+func (g *grpcClient) RequestVote(ctx context.Context, peer Peer, req RequestVoteRequest) (int, bool, error) {
 	rvr := proto.RequestVoteRequest{
 		Term:         int32(req.Term),
 		CandidateID:  int32(req.CandidateID),
@@ -234,7 +128,7 @@ func (g *grpcClient) RequestVote(peer Peer, req RequestVoteRequest) (int, bool, 
 	if client == nil {
 		return -1, false, fmt.Errorf("client not found for peer id: %d", peer.ID())
 	}
-	r, err := (*client).RequestVote(context.TODO(), &rvr)
+	r, err := (*client).RequestVote(ctx, &rvr)
 	if err != nil {
 		return -1, false, fmt.Errorf("failed to send request vote rpc: %w", err)
 	}

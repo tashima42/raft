@@ -12,10 +12,10 @@ download:
 build-debug:
 	go build -gcflags="-N -l" -o $(TARGET) .
 
-build: download
+build: download clean
 	go build -o $(TARGET) -ldflags '-w -X main.Version=$(VERSION)' .
 
-test:
+test: clean
 	go test -v -race ./...
 
 term-test: build
@@ -30,4 +30,4 @@ proto:
 
 .PHONY: clean
 clean:
-	rm -f $(PROTO_DIR)/*.pb.go
+	rm -f dist/*.db
