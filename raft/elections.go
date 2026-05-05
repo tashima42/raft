@@ -18,10 +18,14 @@ func (r *Raft) resetElectionTimeout() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	slog.InfoContext(r.ctx, "resetting election timeout")
-	randTimeout := rand.Int64N(maximumElectionTimeoutMS - minimumElectionTimeoutMS)
-	r.electionTimeout = time.Millisecond * time.Duration(minimumElectionTimeoutMS+randTimeout)
+	r.electionTimeout = r.randomElectionTimeout()
 	slog.InfoContext(r.ctx, fmt.Sprintf("new election timeout is: %s", r.electionTimeout.String()))
 	r.electionResetTime = time.Now()
+}
+
+func (r *Raft) randomElectionTimeout() time.Duration {
+	randTimeout := rand.Int64N(maximumElectionTimeoutMS - minimumElectionTimeoutMS)
+	return time.Millisecond * time.Duration(minimumElectionTimeoutMS+randTimeout)
 }
 
 // electionTimer creates a ticker that checks if the election timeout has been reached
@@ -40,6 +44,7 @@ func (r *Raft) electionTimer() {
 		}
 		if time.Since(r.electionResetTime) >= r.electionTimeout {
 			slog.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
+			time.Sleep(r.randomElectionTimeout())
 			r.State = StateCandidate
 			r.mu.Unlock()
 			return

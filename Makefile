@@ -18,6 +18,9 @@ build: download
 test:
 	go test -v -race ./...
 
+term-test: build
+	./scripts/test.sh
+
 .PHONY: proto
 proto:
 	protoc --proto_path=$(PROTO_DIR) \
