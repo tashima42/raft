@@ -32,24 +32,36 @@ type ServerConfig struct {
 	PeersAPIAddresses             []string
 	DBLocation                    string
 	InitializationCooldownSeconds int
+	LogLocation                   string
 }
 
 var Version = "dev"
 
 func main() {
-	if err := run(context.Background(), os.Stdout, Version); err != nil {
+	if err := run(context.Background(), Version); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, w io.Writer, version string) error {
-	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
-
+func run(ctx context.Context, version string) error {
 	serverConfig, err := parseFlags()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
+
+	var w io.Writer
+
+	if serverConfig.LogLocation == "stdout" {
+		w = os.Stdout
+	} else {
+		w, err = os.OpenFile(serverConfig.LogLocation, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
 
 	peers := make([]*raft.Peer, len(serverConfig.PeersIDs))
 
@@ -118,6 +130,7 @@ func parseFlags() (ServerConfig, error) {
 	port := flag.Int("port", 6437, "port to run grpc server on")
 	apiPort := flag.Int("api-port", 5437, "port to run http server on")
 	sid := flag.Int("id", 1, "raft server id")
+	logFile := flag.String("log-location", "stdout", "raft-{id}.log")
 	peersIDsStr := flag.String("peers-ids", "", "comma separated ids. E.g: 1,2,3")
 	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: localhost:6438,localhost:6439")
 	peersAPIAddressesStr := flag.String("peers-api-addresses", "", "comma separated addresses. e.g: http://localhost:5438,http://localhost:5439")
@@ -133,6 +146,9 @@ func parseFlags() (ServerConfig, error) {
 	}
 	if sid == nil {
 		return ServerConfig{}, errors.New("empty id")
+	}
+	if logFile == nil {
+		return ServerConfig{}, errors.New("empty log file")
 	}
 	if peersIDsStr == nil {
 		return ServerConfig{}, errors.New("empty peers ids")
@@ -171,6 +187,7 @@ func parseFlags() (ServerConfig, error) {
 		PeersIDs:                      ids,
 		PeersAddresses:                ads,
 		PeersAPIAddresses:             apids,
+		LogLocation:                   *logFile,
 		Port:                          *port,
 		APIPort:                       *apiPort,
 		DBLocation:                    *dbLocation,

@@ -18,7 +18,7 @@ build: download clean
 test: clean
 	go test -v -race -timeout 60s ./...
 
-term-test: build
+term-test: clean build
 	./scripts/test.sh
 
 .PHONY: proto
@@ -30,4 +30,4 @@ proto:
 
 .PHONY: clean
 clean:
-	rm -f dist/*.db
+	rm -rf dist && mkdir -p dist

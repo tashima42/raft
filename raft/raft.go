@@ -225,10 +225,9 @@ func (r *Raft) LeaderAPIAddress() (string, error) {
 	return leader.APIAddress(), nil
 }
 
-// AddToLog adds a new log entry to the log and sends append entries requests to peers
+// addToLog adds a new log entry to the log and sends append entries requests to peers
 // to replicate the log entry
-// TODO: Add a goroutine to listen on the receive logs chan and call add to log
-func (r *Raft) AddToLog(entry []byte) error {
+func (r *Raft) addToLog(entry []byte) error {
 	prevLogIndex, err := r.prevLogIndex()
 	if err != nil {
 		return fmt.Errorf("failed to get previous log index: %w", err)
@@ -271,6 +270,8 @@ func (r *Raft) Run() {
 	slog.InfoContext(r.ctx, "running raft")
 	slog.InfoContext(r.ctx, "waiting for initilizaition cooldown")
 
+	slog.InfoContext(r.ctx, "listening for entries")
+	go r.listenForEntries()
 	slog.InfoContext(r.ctx, "starting election timer")
 	go r.electionTimer()
 	runTicker := time.NewTicker(10 * time.Millisecond).C
@@ -292,19 +293,30 @@ func (r *Raft) Run() {
 	}
 }
 
+func (r *Raft) listenForEntries() {
+	for entry := range r.receiveLogsChan {
+		r.mu.Lock()
+		if err := r.addToLog(entry.Entry); err != nil {
+			entry.ErrChan <- err
+			r.mu.Unlock()
+			break
+		}
+		r.mu.Unlock()
+	}
+}
+
 // leaderState runs the main loop for the leader state, sending heartbeats to peers at regular intervals
 func (r *Raft) leaderState() error {
 	heartbeatTicker := time.NewTicker(10 * time.Millisecond).C
 	for range heartbeatTicker {
-		slog.InfoContext(r.ctx, "heartbeat tick received")
+		// slog.InfoContext(r.ctx, "heartbeat tick received")
 		if r.State != StateLeader {
 			slog.InfoContext(r.ctx, "not in leader state, ignoring heartbeat tick")
 			return nil
 		}
-		slog.InfoContext(r.ctx, "sending heartbeats to peers")
 
 		if time.Since(r.heartbeatResetTime) >= r.heartbeatTimeout {
-			slog.Info("time since last heartbeat bigger than timeout, sending append entries")
+			slog.InfoContext(r.ctx, "sending heartbeats to peers")
 			if err := r.sendHeartBeats(); err != nil {
 				return err
 			}
