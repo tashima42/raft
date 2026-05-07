@@ -59,7 +59,7 @@ type LogEntry struct {
 	ErrChan chan error
 }
 
-var heartbeatTimeout time.Duration = time.Millisecond * 1000
+var heartbeatTimeout time.Duration = time.Millisecond * 100
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
 func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
@@ -82,6 +82,9 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 	}
 
 	raft.resetElectionTimeout()
+	raft.mu.Lock()
+	raft.electionTimeout = raft.electionTimeout + raft.initializationCooldown
+	raft.mu.Unlock()
 
 	slog.InfoContext(ctx, "checking if there is a current term")
 	if _, err := raft.currentTerm(); err != nil {
@@ -268,8 +271,6 @@ func (r *Raft) Run() {
 	slog.InfoContext(r.ctx, "running raft")
 	slog.InfoContext(r.ctx, "waiting for initilizaition cooldown")
 
-	time.Sleep(r.initializationCooldown)
-
 	slog.InfoContext(r.ctx, "starting election timer")
 	go r.electionTimer()
 	runTicker := time.NewTicker(10 * time.Millisecond).C
@@ -303,6 +304,7 @@ func (r *Raft) leaderState() error {
 		slog.InfoContext(r.ctx, "sending heartbeats to peers")
 
 		if time.Since(r.heartbeatResetTime) >= r.heartbeatTimeout {
+			slog.Info("time since last heartbeat bigger than timeout, sending append entries")
 			if err := r.sendHeartBeats(); err != nil {
 				return err
 			}
