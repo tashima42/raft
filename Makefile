@@ -16,7 +16,7 @@ build: download clean
 	go build -o $(TARGET) -ldflags '-w -X main.Version=$(VERSION)' .
 
 test: clean
-	go test -v -race ./...
+	go test -v -race -timeout 60s ./...
 
 term-test: build
 	./scripts/test.sh
