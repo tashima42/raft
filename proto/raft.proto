@@ -9,11 +9,6 @@ service Raft {
   rpc RequestVote (RequestVoteRequest) returns (RequestVoteResponse) {}
 }
 
-enum Action {
-  SET = 0;
-  DELETE = 1;
-}
-
 // The request message containing the user's name.
 message AppendEntriesRequest {
   int32 term = 1;
@@ -32,9 +27,7 @@ message AppendEntriesResponse {
 message LogEntry {
   int32 term = 1;
   int32 index = 2;
-  Action action = 3;
-  string key = 4;
-  string value = 5;
+  bytes entry = 3;
 }
 
 message RequestVoteRequest {

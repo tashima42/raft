@@ -21,52 +21,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Action int32
-
-const (
-	Action_SET    Action = 0
-	Action_DELETE Action = 1
-)
-
-// Enum value maps for Action.
-var (
-	Action_name = map[int32]string{
-		0: "SET",
-		1: "DELETE",
-	}
-	Action_value = map[string]int32{
-		"SET":    0,
-		"DELETE": 1,
-	}
-)
-
-func (x Action) Enum() *Action {
-	p := new(Action)
-	*p = x
-	return p
-}
-
-func (x Action) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (Action) Descriptor() protoreflect.EnumDescriptor {
-	return file_raft_proto_enumTypes[0].Descriptor()
-}
-
-func (Action) Type() protoreflect.EnumType {
-	return &file_raft_proto_enumTypes[0]
-}
-
-func (x Action) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use Action.Descriptor instead.
-func (Action) EnumDescriptor() ([]byte, []int) {
-	return file_raft_proto_rawDescGZIP(), []int{0}
-}
-
 // The request message containing the user's name.
 type AppendEntriesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -208,9 +162,7 @@ type LogEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          int32                  `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
 	Index         int32                  `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
-	Action        Action                 `protobuf:"varint,3,opt,name=action,proto3,enum=proto.Action" json:"action,omitempty"`
-	Key           string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
-	Value         string                 `protobuf:"bytes,5,opt,name=value,proto3" json:"value,omitempty"`
+	Entry         []byte                 `protobuf:"bytes,3,opt,name=entry,proto3" json:"entry,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -259,25 +211,11 @@ func (x *LogEntry) GetIndex() int32 {
 	return 0
 }
 
-func (x *LogEntry) GetAction() Action {
+func (x *LogEntry) GetEntry() []byte {
 	if x != nil {
-		return x.Action
+		return x.Entry
 	}
-	return Action_SET
-}
-
-func (x *LogEntry) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
-func (x *LogEntry) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
+	return nil
 }
 
 type RequestVoteRequest struct {
@@ -415,13 +353,11 @@ const file_raft_proto_rawDesc = "" +
 	"\aentries\x18\x06 \x03(\v2\x0f.proto.LogEntryR\aentries\"E\n" +
 	"\x15AppendEntriesResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12\x18\n" +
-	"\asuccess\x18\x02 \x01(\bR\asuccess\"\x83\x01\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\"J\n" +
 	"\bLogEntry\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12\x14\n" +
-	"\x05index\x18\x02 \x01(\x05R\x05index\x12%\n" +
-	"\x06action\x18\x03 \x01(\x0e2\r.proto.ActionR\x06action\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x05 \x01(\tR\x05value\"\x90\x01\n" +
+	"\x05index\x18\x02 \x01(\x05R\x05index\x12\x14\n" +
+	"\x05entry\x18\x03 \x01(\fR\x05entry\"\x90\x01\n" +
 	"\x12RequestVoteRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12 \n" +
 	"\vcandidateID\x18\x02 \x01(\x05R\vcandidateID\x12\"\n" +
@@ -429,11 +365,7 @@ const file_raft_proto_rawDesc = "" +
 	"\vlastLogTerm\x18\x04 \x01(\x05R\vlastLogTerm\"K\n" +
 	"\x13RequestVoteResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12 \n" +
-	"\vvoteGranted\x18\x02 \x01(\bR\vvoteGranted*\x1d\n" +
-	"\x06Action\x12\a\n" +
-	"\x03SET\x10\x00\x12\n" +
-	"\n" +
-	"\x06DELETE\x10\x012\x9c\x01\n" +
+	"\vvoteGranted\x18\x02 \x01(\bR\vvoteGranted2\x9c\x01\n" +
 	"\x04Raft\x12L\n" +
 	"\rAppendEntries\x12\x1b.proto.AppendEntriesRequest\x1a\x1c.proto.AppendEntriesResponse\"\x00\x12F\n" +
 	"\vRequestVote\x12\x19.proto.RequestVoteRequest\x1a\x1a.proto.RequestVoteResponse\"\x00B!Z\x1fgithub.com/tashima42/raft/protob\x06proto3"
@@ -450,28 +382,25 @@ func file_raft_proto_rawDescGZIP() []byte {
 	return file_raft_proto_rawDescData
 }
 
-var file_raft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_raft_proto_goTypes = []any{
-	(Action)(0),                   // 0: proto.Action
-	(*AppendEntriesRequest)(nil),  // 1: proto.AppendEntriesRequest
-	(*AppendEntriesResponse)(nil), // 2: proto.AppendEntriesResponse
-	(*LogEntry)(nil),              // 3: proto.LogEntry
-	(*RequestVoteRequest)(nil),    // 4: proto.RequestVoteRequest
-	(*RequestVoteResponse)(nil),   // 5: proto.RequestVoteResponse
+	(*AppendEntriesRequest)(nil),  // 0: proto.AppendEntriesRequest
+	(*AppendEntriesResponse)(nil), // 1: proto.AppendEntriesResponse
+	(*LogEntry)(nil),              // 2: proto.LogEntry
+	(*RequestVoteRequest)(nil),    // 3: proto.RequestVoteRequest
+	(*RequestVoteResponse)(nil),   // 4: proto.RequestVoteResponse
 }
 var file_raft_proto_depIdxs = []int32{
-	3, // 0: proto.AppendEntriesRequest.entries:type_name -> proto.LogEntry
-	0, // 1: proto.LogEntry.action:type_name -> proto.Action
-	1, // 2: proto.Raft.AppendEntries:input_type -> proto.AppendEntriesRequest
-	4, // 3: proto.Raft.RequestVote:input_type -> proto.RequestVoteRequest
-	2, // 4: proto.Raft.AppendEntries:output_type -> proto.AppendEntriesResponse
-	5, // 5: proto.Raft.RequestVote:output_type -> proto.RequestVoteResponse
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 0: proto.AppendEntriesRequest.entries:type_name -> proto.LogEntry
+	0, // 1: proto.Raft.AppendEntries:input_type -> proto.AppendEntriesRequest
+	3, // 2: proto.Raft.RequestVote:input_type -> proto.RequestVoteRequest
+	1, // 3: proto.Raft.AppendEntries:output_type -> proto.AppendEntriesResponse
+	4, // 4: proto.Raft.RequestVote:output_type -> proto.RequestVoteResponse
+	3, // [3:5] is the sub-list for method output_type
+	1, // [1:3] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_raft_proto_init() }
@@ -484,14 +413,13 @@ func file_raft_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_raft_proto_rawDesc), len(file_raft_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      0,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_raft_proto_goTypes,
 		DependencyIndexes: file_raft_proto_depIdxs,
-		EnumInfos:         file_raft_proto_enumTypes,
 		MessageInfos:      file_raft_proto_msgTypes,
 	}.Build()
 	File_raft_proto = out.File
