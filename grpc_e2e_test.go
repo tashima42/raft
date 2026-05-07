@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tashima42/raft/database"
+	"github.com/tashima42/raft/keyval"
 	"github.com/tashima42/raft/proto"
 	"github.com/tashima42/raft/raft"
 	"github.com/tashima42/raft/transport"
@@ -23,6 +25,7 @@ type e2eNode struct {
 	listener net.Listener
 	server   *grpc.Server
 	raft     *raft.Raft
+	kv       *keyval.KeyVal
 }
 
 type e2eCluster struct {
@@ -70,12 +73,16 @@ func newE2ECluster(t *testing.T, size int) *e2eCluster {
 			t.Fatalf("failed to create grpc client for node %d: %v", n.id, err)
 		}
 
-		r, err := raft.NewRaft(context.Background(), db, client, n.id, peers, 0)
+		sendRaftLogsChan := make(chan raft.LogEntry)
+		r, err := raft.NewRaft(context.Background(), db, client, n.id, peers, 0, sendRaftLogsChan)
 		if err != nil {
 			t.Fatalf("failed to create raft node %d: %v", n.id, err)
 		}
 
+		kv := keyval.NewKeyVal(r.C(), sendRaftLogsChan)
+
 		n.raft = r
+		n.kv = kv
 		n.server = grpc.NewServer()
 		proto.RegisterRaftServer(n.server, &transport.GRPCServer{Raft: r})
 
@@ -156,7 +163,7 @@ func waitForKeyOnAll(t *testing.T, c *e2eCluster, key, want string, timeout time
 	t.Helper()
 	waitFor(t, timeout, fmt.Sprintf("key %q replication", key), func() bool {
 		for _, n := range c.nodes {
-			if n.raft.KeyVal.Get(key) != want {
+			if n.kv.Get(key) != want {
 				return false
 			}
 		}
@@ -215,7 +222,8 @@ func TestGRPCE2E4NodesElectionAndAppend(t *testing.T) {
 	candidate.raft.State = raft.StateLeader
 
 	leader := waitForSingleLeader(t, cluster, 2*time.Second)
-	if err := leader.raft.AddToLog(raft.SetAction, "e2e-k", "v1"); err != nil {
+
+	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: "e2e-k", Value: "v1"}); err != nil {
 		t.Fatalf("append failed: %v", err)
 	}
 	waitForKeyOnAll(t, cluster, "e2e-k", "v1", 2*time.Second)
@@ -230,6 +238,11 @@ func TestGRPCE2EAppendEntriesRPC(t *testing.T) {
 		_ = conn.Close()
 	}()
 
+	b, err := json.Marshal(keyval.Pack{Key: "rpc-k", Value: "rpc-v"})
+	if err != nil {
+		t.Fatalf("failed to marshal json: %v", err)
+	}
+
 	okRes, err := client.AppendEntries(context.Background(), &proto.AppendEntriesRequest{
 		Term:         2,
 		LeaderID:     1,
@@ -237,11 +250,9 @@ func TestGRPCE2EAppendEntriesRPC(t *testing.T) {
 		PrevLogTerm:  0,
 		LeaderCommit: 0,
 		Entries: []*proto.LogEntry{{
-			Term:   2,
-			Index:  1,
-			Action: proto.Action_SET,
-			Key:    "rpc-k",
-			Value:  "rpc-v",
+			Term:  2,
+			Index: 1,
+			Entry: b,
 		}},
 	})
 	if err != nil {
@@ -252,7 +263,7 @@ func TestGRPCE2EAppendEntriesRPC(t *testing.T) {
 	}
 
 	waitFor(t, 2*time.Second, "follower to apply append entries value", func() bool {
-		return follower.raft.KeyVal.Get("rpc-k") == "rpc-v"
+		return follower.kv.Get("rpc-k") == "rpc-v"
 	})
 
 	staleRes, err := client.AppendEntries(context.Background(), &proto.AppendEntriesRequest{
@@ -284,7 +295,7 @@ func TestGRPCE2E5NodesReelectionAndAppend(t *testing.T) {
 	leader1.raft.State = raft.StateLeader
 	waitForSingleLeader(t, cluster, 2*time.Second)
 
-	if err := leader1.raft.AddToLog(raft.SetAction, "before", "one"); err != nil {
+	if err := leader1.kv.SendLogToRaft(keyval.Pack{Key: "before", Value: "one"}); err != nil {
 		t.Fatalf("append before reelection failed: %v", err)
 	}
 	waitForKeyOnAll(t, cluster, "before", "one", 2*time.Second)
@@ -301,7 +312,7 @@ func TestGRPCE2E5NodesReelectionAndAppend(t *testing.T) {
 	leader2.raft.State = raft.StateLeader
 
 	waitForSingleLeader(t, cluster, 2*time.Second)
-	if err := leader2.raft.AddToLog(raft.SetAction, "after", "two"); err != nil {
+	if err := leader1.kv.SendLogToRaft(keyval.Pack{Key: "after", Value: "one"}); err != nil {
 		t.Fatalf("append after reelection failed: %v", err)
 	}
 	waitForKeyOnAll(t, cluster, "after", "two", 2*time.Second)
