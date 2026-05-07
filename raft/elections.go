@@ -45,7 +45,6 @@ func (r *Raft) electionTimer() {
 		}
 		if time.Since(r.electionResetTime) >= r.electionTimeout {
 			slog.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
-			time.Sleep(r.randomElectionTimeout())
 			r.State = StateCandidate
 			r.mu.Unlock()
 			return
