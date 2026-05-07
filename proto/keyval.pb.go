@@ -21,7 +21,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type SetRequest struct {
+type Pack struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
@@ -29,20 +29,20 @@ type SetRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SetRequest) Reset() {
-	*x = SetRequest{}
+func (x *Pack) Reset() {
+	*x = Pack{}
 	mi := &file_keyval_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SetRequest) String() string {
+func (x *Pack) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SetRequest) ProtoMessage() {}
+func (*Pack) ProtoMessage() {}
 
-func (x *SetRequest) ProtoReflect() protoreflect.Message {
+func (x *Pack) ProtoReflect() protoreflect.Message {
 	mi := &file_keyval_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -54,71 +54,19 @@ func (x *SetRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SetRequest.ProtoReflect.Descriptor instead.
-func (*SetRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use Pack.ProtoReflect.Descriptor instead.
+func (*Pack) Descriptor() ([]byte, []int) {
 	return file_keyval_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *SetRequest) GetKey() string {
+func (x *Pack) GetKey() string {
 	if x != nil {
 		return x.Key
 	}
 	return ""
 }
 
-func (x *SetRequest) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
-type SetResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetResponse) Reset() {
-	*x = SetResponse{}
-	mi := &file_keyval_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetResponse) ProtoMessage() {}
-
-func (x *SetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_keyval_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetResponse.ProtoReflect.Descriptor instead.
-func (*SetResponse) Descriptor() ([]byte, []int) {
-	return file_keyval_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *SetResponse) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
-func (x *SetResponse) GetValue() string {
+func (x *Pack) GetValue() string {
 	if x != nil {
 		return x.Value
 	}
@@ -134,7 +82,7 @@ type GetRequest struct {
 
 func (x *GetRequest) Reset() {
 	*x = GetRequest{}
-	mi := &file_keyval_proto_msgTypes[2]
+	mi := &file_keyval_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -146,7 +94,7 @@ func (x *GetRequest) String() string {
 func (*GetRequest) ProtoMessage() {}
 
 func (x *GetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_keyval_proto_msgTypes[2]
+	mi := &file_keyval_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -159,7 +107,7 @@ func (x *GetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return file_keyval_proto_rawDescGZIP(), []int{2}
+	return file_keyval_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *GetRequest) GetKey() string {
@@ -169,79 +117,20 @@ func (x *GetRequest) GetKey() string {
 	return ""
 }
 
-type GetResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetResponse) Reset() {
-	*x = GetResponse{}
-	mi := &file_keyval_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetResponse) ProtoMessage() {}
-
-func (x *GetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_keyval_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
-func (*GetResponse) Descriptor() ([]byte, []int) {
-	return file_keyval_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *GetResponse) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
-func (x *GetResponse) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
 var File_keyval_proto protoreflect.FileDescriptor
 
 const file_keyval_proto_rawDesc = "" +
 	"\n" +
-	"\fkeyval.proto\x12\x05proto\"4\n" +
-	"\n" +
-	"SetRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"5\n" +
-	"\vSetResponse\x12\x10\n" +
+	"\fkeyval.proto\x12\x05proto\".\n" +
+	"\x04Pack\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"\x1e\n" +
 	"\n" +
 	"GetRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\"5\n" +
-	"\vGetResponse\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value2h\n" +
-	"\x06KeyVal\x12.\n" +
-	"\x03Set\x12\x11.proto.SetRequest\x1a\x12.proto.SetResponse\"\x00\x12.\n" +
-	"\x03Get\x12\x11.proto.GetRequest\x1a\x12.proto.GetResponse\"\x00B!Z\x1fgithub.com/tashima42/raft/protob\x06proto3"
+	"\x03key\x18\x01 \x01(\tR\x03key2T\n" +
+	"\x06KeyVal\x12!\n" +
+	"\x03Set\x12\v.proto.Pack\x1a\v.proto.Pack\"\x00\x12'\n" +
+	"\x03Get\x12\x11.proto.GetRequest\x1a\v.proto.Pack\"\x00B!Z\x1fgithub.com/tashima42/raft/protob\x06proto3"
 
 var (
 	file_keyval_proto_rawDescOnce sync.Once
@@ -255,18 +144,16 @@ func file_keyval_proto_rawDescGZIP() []byte {
 	return file_keyval_proto_rawDescData
 }
 
-var file_keyval_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_keyval_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_keyval_proto_goTypes = []any{
-	(*SetRequest)(nil),  // 0: proto.SetRequest
-	(*SetResponse)(nil), // 1: proto.SetResponse
-	(*GetRequest)(nil),  // 2: proto.GetRequest
-	(*GetResponse)(nil), // 3: proto.GetResponse
+	(*Pack)(nil),       // 0: proto.Pack
+	(*GetRequest)(nil), // 1: proto.GetRequest
 }
 var file_keyval_proto_depIdxs = []int32{
-	0, // 0: proto.KeyVal.Set:input_type -> proto.SetRequest
-	2, // 1: proto.KeyVal.Get:input_type -> proto.GetRequest
-	1, // 2: proto.KeyVal.Set:output_type -> proto.SetResponse
-	3, // 3: proto.KeyVal.Get:output_type -> proto.GetResponse
+	0, // 0: proto.KeyVal.Set:input_type -> proto.Pack
+	1, // 1: proto.KeyVal.Get:input_type -> proto.GetRequest
+	0, // 2: proto.KeyVal.Set:output_type -> proto.Pack
+	0, // 3: proto.KeyVal.Get:output_type -> proto.Pack
 	2, // [2:4] is the sub-list for method output_type
 	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -285,7 +172,7 @@ func file_keyval_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_keyval_proto_rawDesc), len(file_keyval_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

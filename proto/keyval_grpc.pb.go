@@ -27,8 +27,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type KeyValClient interface {
-	Set(ctx context.Context, in *SetRequest, opts ...grpc.CallOption) (*SetResponse, error)
-	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
+	Set(ctx context.Context, in *Pack, opts ...grpc.CallOption) (*Pack, error)
+	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*Pack, error)
 }
 
 type keyValClient struct {
@@ -39,9 +39,9 @@ func NewKeyValClient(cc grpc.ClientConnInterface) KeyValClient {
 	return &keyValClient{cc}
 }
 
-func (c *keyValClient) Set(ctx context.Context, in *SetRequest, opts ...grpc.CallOption) (*SetResponse, error) {
+func (c *keyValClient) Set(ctx context.Context, in *Pack, opts ...grpc.CallOption) (*Pack, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetResponse)
+	out := new(Pack)
 	err := c.cc.Invoke(ctx, KeyVal_Set_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -49,9 +49,9 @@ func (c *keyValClient) Set(ctx context.Context, in *SetRequest, opts ...grpc.Cal
 	return out, nil
 }
 
-func (c *keyValClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+func (c *keyValClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*Pack, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetResponse)
+	out := new(Pack)
 	err := c.cc.Invoke(ctx, KeyVal_Get_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -63,8 +63,8 @@ func (c *keyValClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.Cal
 // All implementations must embed UnimplementedKeyValServer
 // for forward compatibility.
 type KeyValServer interface {
-	Set(context.Context, *SetRequest) (*SetResponse, error)
-	Get(context.Context, *GetRequest) (*GetResponse, error)
+	Set(context.Context, *Pack) (*Pack, error)
+	Get(context.Context, *GetRequest) (*Pack, error)
 	mustEmbedUnimplementedKeyValServer()
 }
 
@@ -75,10 +75,10 @@ type KeyValServer interface {
 // pointer dereference when methods are called.
 type UnimplementedKeyValServer struct{}
 
-func (UnimplementedKeyValServer) Set(context.Context, *SetRequest) (*SetResponse, error) {
+func (UnimplementedKeyValServer) Set(context.Context, *Pack) (*Pack, error) {
 	return nil, status.Error(codes.Unimplemented, "method Set not implemented")
 }
-func (UnimplementedKeyValServer) Get(context.Context, *GetRequest) (*GetResponse, error) {
+func (UnimplementedKeyValServer) Get(context.Context, *GetRequest) (*Pack, error) {
 	return nil, status.Error(codes.Unimplemented, "method Get not implemented")
 }
 func (UnimplementedKeyValServer) mustEmbedUnimplementedKeyValServer() {}
@@ -103,7 +103,7 @@ func RegisterKeyValServer(s grpc.ServiceRegistrar, srv KeyValServer) {
 }
 
 func _KeyVal_Set_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetRequest)
+	in := new(Pack)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func _KeyVal_Set_Handler(srv interface{}, ctx context.Context, dec func(interfac
 		FullMethod: KeyVal_Set_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(KeyValServer).Set(ctx, req.(*SetRequest))
+		return srv.(KeyValServer).Set(ctx, req.(*Pack))
 	}
 	return interceptor(ctx, in, info, handler)
 }
