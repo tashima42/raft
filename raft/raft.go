@@ -160,12 +160,12 @@ func (r *Raft) C() <-chan LogEntry {
 }
 
 func (r *Raft) GracefullyShutDown() error {
+	r.cancel()
 	r.logger.InfoContext(r.ctx, "gracefully shutting down and closing database")
-	if err := r.db.Close(); err != nil {
+	if err := r.Client.Close(); err != nil {
 		return err
 	}
-	r.cancel()
-	return r.Client.Close()
+	return r.db.Close()
 }
 
 // initLog gets all logs from stable storage and applies them
@@ -288,23 +288,29 @@ func (r *Raft) Run() {
 			r.logger.InfoContext(r.ctx, "starting election timer")
 			go r.electionTimer()
 			runTicker := time.NewTicker(10 * time.Millisecond).C
-			for range runTicker {
-				r.mu.Lock()
-				state := r.State
-				r.mu.Unlock()
+			for {
+				select {
+				case <-r.ctx.Done():
+					r.logger.InfoContext(r.ctx, "cancel command received, closing.")
+					return
+				case <-runTicker:
+					r.mu.Lock()
+					state := r.State
+					r.mu.Unlock()
 
-				switch state {
-				case StateFollower:
-					// slog.InfoContext(r.ctx, "follower state")
-				case StateCandidate:
-					r.logger.InfoContext(r.ctx, "candidate state")
-					if err := r.candidateState(); err != nil {
-						log.Fatal(err.Error())
-					}
-				case StateLeader:
-					r.logger.InfoContext(r.ctx, "leader state")
-					if err := r.leaderState(); err != nil {
-						log.Fatal(err.Error())
+					switch state {
+					case StateFollower:
+						// slog.InfoContext(r.ctx, "follower state")
+					case StateCandidate:
+						r.logger.InfoContext(r.ctx, "candidate state")
+						if err := r.candidateState(); err != nil {
+							log.Fatal(err.Error())
+						}
+					case StateLeader:
+						r.logger.InfoContext(r.ctx, "leader state")
+						if err := r.leaderState(); err != nil {
+							log.Fatal(err.Error())
+						}
 					}
 				}
 			}
@@ -318,16 +324,14 @@ func (r *Raft) listenForEntries() {
 		case <-r.ctx.Done():
 			r.logger.InfoContext(r.ctx, "cancel command received, closing.")
 			return
-		default:
-			for entry := range r.receiveLogsChan {
-				r.mu.Lock()
-				if err := r.addToLog(entry.Entry); err != nil {
-					entry.ErrChan <- err
-					r.mu.Unlock()
-					break
-				}
+		case entry := <-r.receiveLogsChan:
+			r.mu.Lock()
+			if err := r.addToLog(entry.Entry); err != nil {
+				entry.ErrChan <- err
 				r.mu.Unlock()
+				break
 			}
+			r.mu.Unlock()
 		}
 	}
 }

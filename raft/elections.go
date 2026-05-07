@@ -78,40 +78,33 @@ func (r *Raft) requestVotes() error {
 	defer electionCancel()
 	for _, peer := range r.peers {
 		wg.Add(1)
-		go func() {
+		go func(peer *Peer) {
 			defer wg.Done()
-			for {
-				select {
-				case <-electionCtx.Done():
-					return
-				default:
-					r.logger.InfoContext(electionCtx, "requesting vote from: "+peer.Address())
-					// TODO: implement last log
-					tCtx, tCancel := context.WithTimeout(electionCtx, time.Second*1)
-					defer tCancel()
-					peerTerm, voteGranted, err := r.Client.RequestVote(tCtx, *peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
-					if err != nil {
-						r.logger.ErrorContext(r.ctx, "failed to get response from request vote: "+err.Error())
-						peerTerm = -1
-						voteGranted = false
-					}
-					r.logger.InfoContext(r.ctx, fmt.Sprintf("request vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
-					if peerTerm > currentTerm {
-						r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
-						// TODO: set leader
-						r.mu.Lock()
-						r.State = StateFollower
-						r.mu.Unlock()
-						electionCancel()
-						return
-					}
-					if voteGranted {
-						r.logger.InfoContext(r.ctx, "vote granted, setting peer voted for")
-						peer.SetVotedFor(r.id)
-					}
-				}
+			r.logger.InfoContext(electionCtx, "requesting vote from: "+peer.Address())
+			// TODO: implement last log
+			tCtx, tCancel := context.WithTimeout(electionCtx, time.Second*1)
+			defer tCancel()
+			peerTerm, voteGranted, err := r.Client.RequestVote(tCtx, *peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
+			if err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to get response from request vote: "+err.Error())
+				peerTerm = -1
+				voteGranted = false
 			}
-		}()
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
+			if peerTerm > currentTerm {
+				r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
+				// TODO: set leader
+				r.mu.Lock()
+				r.State = StateFollower
+				r.mu.Unlock()
+				electionCancel()
+				return
+			}
+			if voteGranted {
+				r.logger.InfoContext(r.ctx, "vote granted, setting peer voted for")
+				peer.SetVotedFor(r.id)
+			}
+		}(peer)
 	}
 	wg.Wait()
 
@@ -132,13 +125,12 @@ func (r *Raft) requestVotes() error {
 
 // countVotes checks each peer for votes and if the candidate has a majority, returns true or an error
 func (r *Raft) countVotes() (bool, error) {
-	r.logger.InfoContext(r.ctx, "counting votes, setting initial votes to 1")
+	r.logger.InfoContext(r.ctx, "counting votes")
 	totalVotes := 1
 	votedFor, err := r.votedFor()
 	if err != nil {
 		return false, err
 	}
-	r.logger.InfoContext(r.ctx, fmt.Sprintf("found voted for: %d", votedFor))
 	// convert to follower
 	if votedFor != r.id {
 		r.logger.InfoContext(r.ctx, "server did not vote for self, setting to -1 and converting to follower state")
@@ -154,18 +146,16 @@ func (r *Raft) countVotes() (bool, error) {
 	for _, peer := range r.peers {
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d voted for: %d", peer.ID(), peer.VotedFor()))
 		if peer.VotedFor() == r.id {
-			r.logger.InfoContext(r.ctx, "voted for server, incrementing total votes")
 			totalVotes++
 		}
 	}
 	majority := 1 + ((len(r.peers) + 1) / 2)
-	r.logger.InfoContext(r.ctx, fmt.Sprintf("majority of votes needed is: %d", majority))
 
 	if totalVotes < majority {
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("majority of votes is smaller than current total votes: totalVotes %d < majority %d", totalVotes, majority))
 		return false, nil
 	}
-	r.logger.InfoContext(r.ctx, "majority of votes achieved, returning true for elected")
+	r.logger.InfoContext(r.ctx, fmt.Sprintf("total votes: %d > %d, returning true for elected", totalVotes, majority))
 	return true, nil
 }
 

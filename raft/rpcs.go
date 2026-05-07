@@ -20,7 +20,6 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 
-			r.logger.InfoContext(r.ctx, "getting current term")
 			currentTerm, err := r.currentTerm()
 			if err != nil {
 				return false, currentTerm, fmt.Errorf("rpc - failed to get current term: %w", err)
@@ -99,7 +98,6 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 
-			r.logger.InfoContext(r.ctx, "getting current term")
 			currentTerm, err := r.currentTerm()
 			if err != nil {
 				return -1, false, err
@@ -136,7 +134,7 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 					return currentTerm, false, nil
 				}
 
-				r.logger.InfoContext(r.ctx, "didn't vote for anyone or voted for candidate, voting true and setting voted for to candidate id")
+				r.logger.InfoContext(r.ctx, fmt.Sprintf("voting for: %d", req.CandidateID))
 				err := r.setVotedFor(req.CandidateID)
 				return currentTerm, true, err
 			}

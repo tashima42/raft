@@ -55,10 +55,11 @@ func run(version string) error {
 	if serverConfig.LogLocation == "stdout" {
 		w = os.Stdout
 	} else {
-		w, err = os.OpenFile(serverConfig.LogLocation, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
+		f, err := os.OpenFile(serverConfig.LogLocation, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
 		if err != nil {
 			log.Fatal(err)
 		}
+		w = io.MultiWriter(os.Stdout, f)
 	}
 
 	logger := slog.New(slog.NewTextHandler(w, nil))
