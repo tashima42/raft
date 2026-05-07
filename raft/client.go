@@ -84,16 +84,10 @@ func (g *grpcClient) AppendEntries(ctx context.Context, peer Peer, req AppendEnt
 	}
 
 	for i, entry := range req.Entries {
-		action, err := KeyValActionAtoi(KeyValAction(entry.Action))
-		if err != nil {
-			return false, -1, fmt.Errorf("invalid action in log entry: %w", err)
-		}
 		re := proto.LogEntry{
-			Term:   int32(entry.Term),
-			Index:  int32(entry.Index),
-			Action: proto.Action(action),
-			Key:    entry.Key,
-			Value:  entry.Value,
+			Term:  int32(entry.Term),
+			Index: int32(entry.Index),
+			Entry: entry.Entry,
 		}
 		rar.Entries[i] = &re
 	}

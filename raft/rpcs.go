@@ -64,9 +64,9 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 
 	slog.InfoContext(r.ctx, "ranging through request entries")
 	for _, entry := range req.Entries {
-		slog.InfoContext(r.ctx, fmt.Sprintf("executing log on keyvalue state machine: (%s) | %s -> %s", entry.Action, entry.Key, entry.Value))
-		if err := r.KeyVal.Exec(KeyValAction(entry.Action), entry.Key, entry.Value); err != nil {
-			return false, currentTerm, fmt.Errorf("failed to exec operation on keyVal store: %w", err)
+		slog.InfoContext(r.ctx, "executing log on keyvalue state machine")
+		if err := r.sendLogToClient(entry.Entry); err != nil {
+			return false, currentTerm, fmt.Errorf("failed to exec operation on client: %w", err)
 		}
 	}
 

@@ -3,7 +3,6 @@ package transport
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/tashima42/raft/database"
 	"github.com/tashima42/raft/proto"
@@ -26,16 +25,10 @@ func (g *GRPCServer) AppendEntries(ctx context.Context, req *proto.AppendEntries
 	}
 
 	for i, entry := range req.Entries {
-		action, err := raft.KeyValActionItoa(int(entry.Action.Number()))
-		if err != nil {
-			return nil, fmt.Errorf("invalid action in log entry: %w", err)
-		}
 		rar.Entries[i] = database.LogEntry{
-			Term:   int(entry.Term),
-			Index:  int(entry.Index),
-			Action: string(action),
-			Key:    entry.Key,
-			Value:  entry.Value,
+			Term:  int(entry.Term),
+			Index: int(entry.Index),
+			Entry: entry.Entry,
 		}
 	}
 	success, term, err := g.Raft.AppendEntries(rar)

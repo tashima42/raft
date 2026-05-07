@@ -1,3 +1,4 @@
+// Package raft implements the raft protocol
 package raft
 
 import (
@@ -46,16 +47,22 @@ type Raft struct {
 	heartbeatTimeout       time.Duration
 	electionResetTime      time.Time
 	heartbeatResetTime     time.Time
-	KeyVal                 keyVal
+	sendLogsChan           chan LogEntry
+	receiveLogsChan        chan LogEntry
 	lastApplied            int
 	State                  RaftState
 	ctx                    context.Context
 }
 
+type LogEntry struct {
+	Entry   []byte
+	ErrChan chan error
+}
+
 var heartbeatTimeout time.Duration = time.Millisecond * 1000
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
-func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int) (*Raft, error) {
+func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
 	slog.InfoContext(ctx, "creating a new raft instance")
 	raft := &Raft{
 		ctx:                    ctx,
@@ -69,7 +76,8 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 		electionResetTime:      time.Now(),
 		heartbeatResetTime:     time.Now(),
 		lastApplied:            -1,
-		KeyVal:                 newKeyVal(),
+		sendLogsChan:           make(chan LogEntry),
+		receiveLogsChan:        receiveLogsChan,
 		State:                  StateFollower,
 	}
 
@@ -139,6 +147,10 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 	return raft, nil
 }
 
+func (r *Raft) C() <-chan LogEntry {
+	return r.sendLogsChan
+}
+
 func (r *Raft) GracefullyShutDown() error {
 	slog.InfoContext(r.ctx, "gracefully shutting down and closing database")
 	if err := r.db.Close(); err != nil {
@@ -165,13 +177,25 @@ func (r *Raft) initLog() error {
 			return fmt.Errorf("failed to set current term: %w", err)
 		}
 
-		slog.InfoContext(r.ctx, fmt.Sprintf("executing log on keyvalue state machine: (%s) | %s -> %s", log.Action, log.Key, log.Value))
-		if err := r.KeyVal.Exec(KeyValAction(log.Action), log.Key, log.Value); err != nil {
-			return fmt.Errorf("failed to exec operation on keyVal store: %w", err)
+		if err := r.sendLogToClient(log.Entry); err != nil {
+			return fmt.Errorf("failed to send log to client: %w", err)
 		}
 		r.lastApplied = log.Index
 	}
 	return nil
+}
+
+func (r *Raft) sendLogToClient(entry []byte) error {
+	errChan := make(chan error, 1)
+
+	r.sendLogsChan <- LogEntry{
+		Entry:   entry,
+		ErrChan: errChan,
+	}
+
+	err := <-errChan
+
+	return err
 }
 
 // IsLeader returns true if the server is currently the leader, false otherwise
@@ -200,7 +224,8 @@ func (r *Raft) LeaderAPIAddress() (string, error) {
 
 // AddToLog adds a new log entry to the log and sends append entries requests to peers
 // to replicate the log entry
-func (r *Raft) AddToLog(action KeyValAction, key, value string) error {
+// TODO: Add a goroutine to listen on the receive logs chan and call add to log
+func (r *Raft) AddToLog(entry []byte) error {
 	prevLogIndex, err := r.prevLogIndex()
 	if err != nil {
 		return fmt.Errorf("failed to get previous log index: %w", err)
@@ -209,11 +234,11 @@ func (r *Raft) AddToLog(action KeyValAction, key, value string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get current term: %w", err)
 	}
-	entry := database.LogEntry{Index: prevLogIndex + 1, Term: term, Action: string(action), Key: key, Value: value}
-	if err := r.appendLogs([]database.LogEntry{entry}); err != nil {
+	dbEntry := database.LogEntry{Index: prevLogIndex + 1, Term: term, Entry: entry}
+	if err := r.appendLogs([]database.LogEntry{dbEntry}); err != nil {
 		return fmt.Errorf("failed to append log: %w", err)
 	}
-	if err := r.sendAppendEntries([]database.LogEntry{entry}, true); err != nil {
+	if err := r.sendAppendEntries([]database.LogEntry{dbEntry}, true); err != nil {
 		if errors.Is(err, ErrQuorumNotReached) {
 			// entry
 			slog.InfoContext(r.ctx, "quorum not reached for log entry, removing log entry and returning error")
@@ -223,13 +248,17 @@ func (r *Raft) AddToLog(action KeyValAction, key, value string) error {
 		}
 		return fmt.Errorf("failed to send append entries: %w", err)
 	}
+	if err := r.sendLogToClient(entry); err != nil {
+		return fmt.Errorf("failed to send log to client: %w", err)
+	}
+
 	if err := r.setPrevLogIndex(prevLogIndex + 1); err != nil {
 		return fmt.Errorf("failed to set previous log index: %w", err)
 	}
 	if err := r.setLeaderCommit(prevLogIndex + 1); err != nil {
 		return fmt.Errorf("failed to set leader commit: %w", err)
 	}
-	return r.KeyVal.Exec(KeyValAction(action), key, value)
+	return nil
 }
 
 // Run starts the main loop and goroutines for the server.
