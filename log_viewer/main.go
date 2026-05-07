@@ -89,6 +89,9 @@ header p {
 	font-size: 12px;
 	color: #cbd5e1;
 }
+header a {
+	color: white;
+}
 .container {
 	padding: 10px;
 }
@@ -138,13 +141,13 @@ tr:nth-child(even) td {
 <header>
 	<h1>Raft Log Viewer</h1>
 	<p>Generated at {{.GeneratedAt}} | Sources: {{len .Sources}} | Showing rows: {{len .Rows}} / {{.TotalRows}} | Page {{.Page}}/{{.TotalPages}}</p>
-</header>
-<div class="container">
 	<div style="margin: 0 0 10px; font-size: 12px;">
 		{{if .HasPrev}}<a href="/?page={{.PrevPage}}">Previous</a>{{end}}
 		{{if and .HasPrev .HasNext}} | {{end}}
 		{{if .HasNext}}<a href="/?page={{.NextPage}}">Next</a>{{end}}
 	</div>
+</header>
+<div class="container">
 	<div class="table-wrap">
 		<table>
 			<thead>
@@ -168,11 +171,6 @@ tr:nth-child(even) td {
 				{{end}}
 			</tbody>
 		</table>
-	</div>
-	<div style="margin: 0 0 10px; font-size: 12px;">
-		{{if .HasPrev}}<a href="/?page={{.PrevPage}}">Previous</a>{{end}}
-		{{if and .HasPrev .HasNext}} | {{end}}
-		{{if .HasNext}}<a href="/?page={{.NextPage}}">Next</a>{{end}}
 	</div>
 </div>
 </body>
