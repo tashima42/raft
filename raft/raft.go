@@ -40,6 +40,7 @@ type Raft struct {
 	id                     int
 	peers                  []*Peer
 	db                     database.Database
+	logger                 *slog.Logger
 	Client                 Client
 	mu                     *sync.Mutex
 	initializationCooldown time.Duration
@@ -63,12 +64,14 @@ var heartbeatTimeout time.Duration = time.Millisecond * 100
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
 func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
-	slog.InfoContext(ctx, "creating a new raft instance")
+	logger := slog.Default().With("node_id", id)
+	logger.InfoContext(ctx, "creating a new raft instance")
 	raft := &Raft{
 		ctx:                    ctx,
 		id:                     id,
 		peers:                  peers,
 		db:                     db,
+		logger:                 logger,
 		Client:                 client,
 		mu:                     &sync.Mutex{},
 		initializationCooldown: time.Duration(initializationCooldownSecs) * time.Second,
@@ -86,29 +89,29 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 	raft.electionTimeout = raft.electionTimeout + raft.initializationCooldown
 	raft.mu.Unlock()
 
-	slog.InfoContext(ctx, "checking if there is a current term")
+	raft.logger.InfoContext(ctx, "checking if there is a current term")
 	if _, err := raft.currentTerm(); err != nil {
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("failed to get current term: %w", err)
 		}
-		slog.InfoContext(ctx, "setting current term to 0")
+		raft.logger.InfoContext(ctx, "setting current term to 0")
 		if err := raft.setCurrentTerm(0); err != nil {
 			return nil, err
 		}
 	}
 
-	slog.InfoContext(ctx, "checking if there is voted for")
+	raft.logger.InfoContext(ctx, "checking if there is voted for")
 	if _, err := raft.votedFor(); err != nil {
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("failed to get voted for: %w", err)
 		}
-		slog.InfoContext(ctx, "setting voted for to invalid value -1")
+		raft.logger.InfoContext(ctx, "setting voted for to invalid value -1")
 		if err := raft.setVotedFor(-1); err != nil {
 			return nil, err
 		}
 	}
 
-	slog.InfoContext(ctx, "checking if there is a prevLogIndex")
+	raft.logger.InfoContext(ctx, "checking if there is a prevLogIndex")
 	if _, err := raft.prevLogIndex(); err != nil {
 		// if there is no prev log index, set to 0 to indicate that there are no logs
 		// and prevent the no rows error from being returned when trying to get the prev log index later on
@@ -120,7 +123,7 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 		}
 	}
 
-	slog.InfoContext(ctx, "checking if there is a prevLogTerm")
+	raft.logger.InfoContext(ctx, "checking if there is a prevLogTerm")
 	if _, err := raft.prevLogTerm(); err != nil {
 		// if there is no prev log term, set to 0 to indicate that there are no logs
 		// and prevent the no rows error from being returned when trying to get the prev log term later on
@@ -132,7 +135,7 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 		}
 	}
 
-	slog.InfoContext(ctx, "checking if there is a leaderID")
+	raft.logger.InfoContext(ctx, "checking if there is a leaderID")
 	if _, err := raft.leaderID(); err != nil {
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("failed to get leader id: %w", err)
@@ -142,7 +145,7 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 		}
 	}
 
-	slog.InfoContext(ctx, "initiating log on start")
+	raft.logger.InfoContext(ctx, "initiating log on start")
 	if err := raft.initLog(); err != nil {
 		return nil, fmt.Errorf("failed to init and apply log: %w", err)
 	}
@@ -155,7 +158,7 @@ func (r *Raft) C() <-chan LogEntry {
 }
 
 func (r *Raft) GracefullyShutDown() error {
-	slog.InfoContext(r.ctx, "gracefully shutting down and closing database")
+	r.logger.InfoContext(r.ctx, "gracefully shutting down and closing database")
 	if err := r.db.Close(); err != nil {
 		return err
 	}
@@ -166,16 +169,16 @@ func (r *Raft) GracefullyShutDown() error {
 // to the internal key value state machine. It also updates the
 // last applied index and current term.
 func (r *Raft) initLog() error {
-	slog.InfoContext(r.ctx, "initiating log")
+	r.logger.InfoContext(r.ctx, "initiating log")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	logs, err := r.logs()
 	if err != nil {
 		return fmt.Errorf("failed to get logs: %w", err)
 	}
-	slog.InfoContext(r.ctx, "ranging through logs")
+	r.logger.InfoContext(r.ctx, "ranging through logs")
 	for _, log := range logs {
-		slog.InfoContext(r.ctx, fmt.Sprintf("setting term to: %d", log.Term))
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting term to: %d", log.Term))
 		if err := r.setCurrentTerm(log.Term); err != nil {
 			return fmt.Errorf("failed to set current term: %w", err)
 		}
@@ -243,7 +246,7 @@ func (r *Raft) addToLog(entry []byte) error {
 	if err := r.sendAppendEntries([]database.LogEntry{dbEntry}, true); err != nil {
 		if errors.Is(err, ErrQuorumNotReached) {
 			// entry
-			slog.InfoContext(r.ctx, "quorum not reached for log entry, removing log entry and returning error")
+			r.logger.InfoContext(r.ctx, "quorum not reached for log entry, removing log entry and returning error")
 			if err := r.deleteLogsFromIndex(prevLogIndex + 1); err != nil {
 				return fmt.Errorf("failed to delete log entry after quorum not reached: %w", err)
 			}
@@ -267,12 +270,12 @@ func (r *Raft) addToLog(entry []byte) error {
 // It calles the candidate state function and leader state function
 // based on the current state.
 func (r *Raft) Run() {
-	slog.InfoContext(r.ctx, "running raft")
-	slog.InfoContext(r.ctx, "waiting for initilizaition cooldown")
+	r.logger.InfoContext(r.ctx, "running raft")
+	r.logger.InfoContext(r.ctx, "waiting for initilizaition cooldown")
 
-	slog.InfoContext(r.ctx, "listening for entries")
+	r.logger.InfoContext(r.ctx, "listening for entries")
 	go r.listenForEntries()
-	slog.InfoContext(r.ctx, "starting election timer")
+	r.logger.InfoContext(r.ctx, "starting election timer")
 	go r.electionTimer()
 	runTicker := time.NewTicker(10 * time.Millisecond).C
 	for range runTicker {
@@ -280,12 +283,12 @@ func (r *Raft) Run() {
 		case StateFollower:
 			// slog.InfoContext(r.ctx, "follower state")
 		case StateCandidate:
-			slog.InfoContext(r.ctx, "candidate state")
+			r.logger.InfoContext(r.ctx, "candidate state")
 			if err := r.candidateState(); err != nil {
 				log.Fatal(err.Error())
 			}
 		case StateLeader:
-			slog.InfoContext(r.ctx, "leader state")
+			r.logger.InfoContext(r.ctx, "leader state")
 			if err := r.leaderState(); err != nil {
 				log.Fatal(err.Error())
 			}
@@ -311,12 +314,12 @@ func (r *Raft) leaderState() error {
 	for range heartbeatTicker {
 		// slog.InfoContext(r.ctx, "heartbeat tick received")
 		if r.State != StateLeader {
-			slog.InfoContext(r.ctx, "not in leader state, ignoring heartbeat tick")
+			r.logger.InfoContext(r.ctx, "not in leader state, ignoring heartbeat tick")
 			return nil
 		}
 
 		if time.Since(r.heartbeatResetTime) >= r.heartbeatTimeout {
-			slog.InfoContext(r.ctx, "sending heartbeats to peers")
+			r.logger.InfoContext(r.ctx, "sending heartbeats to peers")
 			if err := r.sendHeartBeats(); err != nil {
 				return err
 			}
@@ -340,7 +343,7 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 	defer r.mu.Unlock()
 
 	if r.State != StateLeader {
-		slog.InfoContext(r.ctx, "not in leader state, cannot send append entries")
+		r.logger.InfoContext(r.ctx, "not in leader state, cannot send append entries")
 		return errors.New("cannot send append entries when not in leader state")
 	}
 
@@ -367,7 +370,7 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 	totalSuccess := 1
 
 	for _, peer := range r.peers {
-		slog.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d: %s", peer.ID(), peer.Address()))
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d: %s", peer.ID(), peer.Address()))
 		appendEntriesReq := AppendEntriesRequest{
 			Term:         currentTerm,
 			LeaderID:     r.id,
@@ -376,24 +379,24 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 			Entries:      entries,
 			LeaderCommit: leaderCommit,
 		}
-		slog.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
 		tCtx, cancel := context.WithTimeout(r.ctx, time.Second*1)
 		defer cancel()
 		success, term, err := r.Client.AppendEntries(tCtx, *peer, appendEntriesReq)
 		if err != nil {
-			slog.ErrorContext(r.ctx, "failed to send append entries request to peer: "+err.Error())
+			r.logger.ErrorContext(r.ctx, "failed to send append entries request to peer: "+err.Error())
 			success = false
 			term = -1
 		}
-		slog.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
 		if !success {
-			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
 			// TODO: implement retries
 			continue
 		}
 		totalSuccess += 1
 		if term > currentTerm {
-			slog.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
 			r.State = StateFollower
 			return nil
 		}
