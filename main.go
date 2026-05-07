@@ -38,13 +38,13 @@ type ServerConfig struct {
 var Version = "dev"
 
 func main() {
-	if err := run(context.Background(), Version); err != nil {
+	if err := run(Version); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, version string) error {
+func run(version string) error {
 	serverConfig, err := parseFlags()
 	if err != nil {
 		log.Fatal(err.Error())
@@ -61,7 +61,7 @@ func run(ctx context.Context, version string) error {
 		}
 	}
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
+	logger := slog.New(slog.NewTextHandler(w, nil))
 
 	peers := make([]*raft.Peer, len(serverConfig.PeersIDs))
 
@@ -81,7 +81,8 @@ func run(ctx context.Context, version string) error {
 
 	sendRaftLogsChan := make(chan raft.LogEntry)
 
-	r, err := raft.NewRaft(ctx, db, grpcClient, serverConfig.ServerID, peers, serverConfig.InitializationCooldownSeconds, sendRaftLogsChan)
+	ctx, cancel := context.WithCancel(context.Background())
+	r, err := raft.NewRaft(ctx, cancel, logger, db, grpcClient, serverConfig.ServerID, peers, serverConfig.InitializationCooldownSeconds, sendRaftLogsChan)
 	if err != nil {
 		return fmt.Errorf("failed to start raft: %w", err)
 	}

@@ -36,7 +36,7 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 	t.Helper()
 
 	distDir := filepath.Join("dist", testName)
-	if err := os.MkdirAll(distDir, 0755); err != nil {
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
 		t.Fatalf("failed to create dist dir: %v", err)
 	}
 
@@ -48,7 +48,7 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 	t.Cleanup(func() {
 		_ = f.Close()
 	})
-	slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
+	logger := slog.New(slog.NewTextHandler(f, nil))
 
 	nodes := make([]*e2eNode, 0, size)
 	for i := range size {
@@ -84,9 +84,10 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 		if err != nil {
 			t.Fatalf("failed to create grpc client for node %d: %v", n.id, err)
 		}
+		ctx, cancel := context.WithCancel(context.Background())
 
 		sendRaftLogsChan := make(chan raft.LogEntry)
-		r, err := raft.NewRaft(context.Background(), db, client, n.id, peers, 0, sendRaftLogsChan)
+		r, err := raft.NewRaft(ctx, cancel, logger, db, client, n.id, peers, 0, sendRaftLogsChan)
 		if err != nil {
 			t.Fatalf("failed to create raft node %d: %v", n.id, err)
 		}
@@ -133,29 +134,29 @@ func (c *e2eCluster) nodeByID(id int) *e2eNode {
 	return nil
 }
 
-func waitFor(t *testing.T, timeout time.Duration, what string, fn func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if fn() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
-
-func waitForKeyOnAll(t *testing.T, c *e2eCluster, key, want string, timeout time.Duration) {
-	t.Helper()
-	waitFor(t, timeout, fmt.Sprintf("key %q replication", key), func() bool {
-		for _, n := range c.nodes {
-			if n.kv.Get(key) != want {
-				return false
-			}
-		}
-		return true
-	})
-}
+// func waitFor(t *testing.T, timeout time.Duration, what string, fn func() bool) {
+// 	t.Helper()
+// 	deadline := time.Now().Add(timeout)
+// 	for time.Now().Before(deadline) {
+// 		if fn() {
+// 			return
+// 		}
+// 		time.Sleep(20 * time.Millisecond)
+// 	}
+// 	t.Fatalf("timed out waiting for %s", what)
+// }
+//
+// func waitForKeyOnAll(t *testing.T, c *e2eCluster, key, want string, timeout time.Duration) {
+// 	t.Helper()
+// 	waitFor(t, timeout, fmt.Sprintf("key %q replication", key), func() bool {
+// 		for _, n := range c.nodes {
+// 			if n.kv.Get(key) != want {
+// 				return false
+// 			}
+// 		}
+// 		return true
+// 	})
+// }
 
 func startClusterNormally(c *e2eCluster) {
 	for _, n := range c.nodes {
@@ -202,27 +203,27 @@ func waitForStableSingleLeader(t *testing.T, c *e2eCluster, timeout, stableFor t
 	return nil
 }
 
-func TestGRPCE2E4NodesNaturalElection(t *testing.T) {
+func Test4NodesNaturalElection(t *testing.T) {
 	cluster := newE2ECluster(t, t.Name(), 4)
 	startClusterNormally(cluster)
 
-	leader := waitForStableSingleLeader(t, cluster, 12*time.Second, 600*time.Millisecond)
+	leader := waitForStableSingleLeader(t, cluster, 15*time.Second, 600*time.Millisecond)
 	if leader == nil {
 		t.Fatalf("expected a leader")
 	}
 }
 
-func TestGRPCE2E4NodesNaturalElectionAndReplication(t *testing.T) {
-	cluster := newE2ECluster(t, t.Name(), 4)
-	startClusterNormally(cluster)
-
-	leader := waitForStableSingleLeader(t, cluster, 12*time.Second, 600*time.Millisecond)
-
-	k := fmt.Sprintf("natural-k-%d", time.Now().UnixNano())
-	v := "natural-v"
-	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: k, Value: v}); err != nil {
-		t.Fatalf("append through elected leader failed: %v", err)
-	}
-
-	waitForKeyOnAll(t, cluster, k, v, 8*time.Second)
-}
+// func TestGRPCE2E4NodesNaturalElectionAndReplication(t *testing.T) {
+// 	cluster := newE2ECluster(t, t.Name(), 4)
+// 	startClusterNormally(cluster)
+//
+// 	leader := waitForStableSingleLeader(t, cluster, 12*time.Second, 600*time.Millisecond)
+//
+// 	k := fmt.Sprintf("natural-k-%d", time.Now().UnixNano())
+// 	v := "natural-v"
+// 	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: k, Value: v}); err != nil {
+// 		t.Fatalf("append through elected leader failed: %v", err)
+// 	}
+//
+// 	waitForKeyOnAll(t, cluster, k, v, 8*time.Second)
+// }

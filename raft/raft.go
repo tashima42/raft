@@ -53,6 +53,7 @@ type Raft struct {
 	lastApplied            int
 	State                  RaftState
 	ctx                    context.Context
+	cancel                 context.CancelFunc
 }
 
 type LogEntry struct {
@@ -63,11 +64,12 @@ type LogEntry struct {
 var heartbeatTimeout time.Duration = time.Millisecond * 100
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
-func NewRaft(ctx context.Context, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
-	logger := slog.Default().With("node_id", id)
+func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
+	logger = logger.With("node_id", id)
 	logger.InfoContext(ctx, "creating a new raft instance")
 	raft := &Raft{
 		ctx:                    ctx,
+		cancel:                 cancel,
 		id:                     id,
 		peers:                  peers,
 		db:                     db,
@@ -92,7 +94,7 @@ func NewRaft(ctx context.Context, db database.Database, client Client, id int, p
 	raft.logger.InfoContext(ctx, "checking if there is a current term")
 	if _, err := raft.currentTerm(); err != nil {
 		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("failed to get current term: %w", err)
+			return nil, fmt.Errorf("new - failed to get current term: %w", err)
 		}
 		raft.logger.InfoContext(ctx, "setting current term to 0")
 		if err := raft.setCurrentTerm(0); err != nil {
@@ -162,6 +164,7 @@ func (r *Raft) GracefullyShutDown() error {
 	if err := r.db.Close(); err != nil {
 		return err
 	}
+	r.cancel()
 	return r.Client.Close()
 }
 
@@ -206,6 +209,8 @@ func (r *Raft) sendLogToClient(entry []byte) error {
 
 // IsLeader returns true if the server is currently the leader, false otherwise
 func (r *Raft) IsLeader() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.State == StateLeader
 }
 
@@ -237,7 +242,7 @@ func (r *Raft) addToLog(entry []byte) error {
 	}
 	term, err := r.currentTerm()
 	if err != nil {
-		return fmt.Errorf("failed to get current term: %w", err)
+		return fmt.Errorf("add to log - failed to get current term: %w", err)
 	}
 	dbEntry := database.LogEntry{Index: prevLogIndex + 1, Term: term, Entry: entry}
 	if err := r.appendLogs([]database.LogEntry{dbEntry}); err != nil {
@@ -270,63 +275,92 @@ func (r *Raft) addToLog(entry []byte) error {
 // It calles the candidate state function and leader state function
 // based on the current state.
 func (r *Raft) Run() {
-	r.logger.InfoContext(r.ctx, "running raft")
-	r.logger.InfoContext(r.ctx, "waiting for initilizaition cooldown")
+	for {
+		select {
+		case <-r.ctx.Done():
+			r.logger.InfoContext(r.ctx, "cancel command received, closing.")
+			return
+		default:
+			r.logger.InfoContext(r.ctx, "running raft")
+			r.logger.InfoContext(r.ctx, "waiting for initilizaition cooldown")
+			r.logger.InfoContext(r.ctx, "listening for entries")
+			go r.listenForEntries()
+			r.logger.InfoContext(r.ctx, "starting election timer")
+			go r.electionTimer()
+			runTicker := time.NewTicker(10 * time.Millisecond).C
+			for range runTicker {
+				r.mu.Lock()
+				state := r.State
+				r.mu.Unlock()
 
-	r.logger.InfoContext(r.ctx, "listening for entries")
-	go r.listenForEntries()
-	r.logger.InfoContext(r.ctx, "starting election timer")
-	go r.electionTimer()
-	runTicker := time.NewTicker(10 * time.Millisecond).C
-	for range runTicker {
-		switch r.State {
-		case StateFollower:
-			// slog.InfoContext(r.ctx, "follower state")
-		case StateCandidate:
-			r.logger.InfoContext(r.ctx, "candidate state")
-			if err := r.candidateState(); err != nil {
-				log.Fatal(err.Error())
-			}
-		case StateLeader:
-			r.logger.InfoContext(r.ctx, "leader state")
-			if err := r.leaderState(); err != nil {
-				log.Fatal(err.Error())
+				switch state {
+				case StateFollower:
+					// slog.InfoContext(r.ctx, "follower state")
+				case StateCandidate:
+					r.logger.InfoContext(r.ctx, "candidate state")
+					if err := r.candidateState(); err != nil {
+						log.Fatal(err.Error())
+					}
+				case StateLeader:
+					r.logger.InfoContext(r.ctx, "leader state")
+					if err := r.leaderState(); err != nil {
+						log.Fatal(err.Error())
+					}
+				}
 			}
 		}
 	}
 }
 
 func (r *Raft) listenForEntries() {
-	for entry := range r.receiveLogsChan {
-		r.mu.Lock()
-		if err := r.addToLog(entry.Entry); err != nil {
-			entry.ErrChan <- err
-			r.mu.Unlock()
-			break
+	for {
+		select {
+		case <-r.ctx.Done():
+			r.logger.InfoContext(r.ctx, "cancel command received, closing.")
+			return
+		default:
+			for entry := range r.receiveLogsChan {
+				r.mu.Lock()
+				if err := r.addToLog(entry.Entry); err != nil {
+					entry.ErrChan <- err
+					r.mu.Unlock()
+					break
+				}
+				r.mu.Unlock()
+			}
 		}
-		r.mu.Unlock()
 	}
 }
 
 // leaderState runs the main loop for the leader state, sending heartbeats to peers at regular intervals
 func (r *Raft) leaderState() error {
 	heartbeatTicker := time.NewTicker(10 * time.Millisecond).C
-	for range heartbeatTicker {
-		// slog.InfoContext(r.ctx, "heartbeat tick received")
-		if r.State != StateLeader {
-			r.logger.InfoContext(r.ctx, "not in leader state, ignoring heartbeat tick")
+	for {
+		select {
+		case <-r.ctx.Done():
 			return nil
-		}
+		case <-heartbeatTicker:
+			// slog.InfoContext(r.ctx, "heartbeat tick received")
+			r.mu.Lock()
+			state := r.State
+			heartbeatResetTime := r.heartbeatResetTime
+			heartbeatTimeout := r.heartbeatTimeout
+			r.mu.Unlock()
 
-		if time.Since(r.heartbeatResetTime) >= r.heartbeatTimeout {
-			r.logger.InfoContext(r.ctx, "sending heartbeats to peers")
-			if err := r.sendHeartBeats(); err != nil {
-				return err
+			if state != StateLeader {
+				r.logger.InfoContext(r.ctx, "not in leader state, ignoring heartbeat tick")
+				return nil
 			}
-			return nil
+
+			if time.Since(heartbeatResetTime) >= heartbeatTimeout {
+				r.logger.InfoContext(r.ctx, "sending heartbeats to peers")
+				if err := r.sendHeartBeats(); err != nil {
+					return err
+				}
+				return nil
+			}
 		}
 	}
-	return nil
 }
 
 // sendHeartBeats sends empty append entries commands to all peers to maintain leadership
@@ -351,7 +385,7 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 
 	currentTerm, err := r.currentTerm()
 	if err != nil {
-		return fmt.Errorf("failed to get current term: %w", err)
+		return fmt.Errorf("send ape - failed to get current term: %w", err)
 	}
 	prevLogIndex, err := r.prevLogIndex()
 	if err != nil {

@@ -31,24 +31,32 @@ func (r *Raft) randomElectionTimeout() time.Duration {
 // electionTimer creates a ticker that checks if the election timeout has been reached
 // and transitions the server to candidate state if it has.
 func (r *Raft) electionTimer() {
-	r.logger.InfoContext(r.ctx, "running election timer")
-
-	electionTicker := time.NewTicker(10 * time.Millisecond).C
-
-	for range electionTicker {
-		r.mu.Lock()
-		if r.State == StateLeader {
-			r.logger.InfoContext(r.ctx, "in leader state, ignoring election tick")
-			r.mu.Unlock()
+	for {
+		select {
+		case <-r.ctx.Done():
+			r.logger.InfoContext(r.ctx, "cancel command received, closing.")
 			return
+		default:
+			r.logger.InfoContext(r.ctx, "running election timer")
+
+			electionTicker := time.NewTicker(10 * time.Millisecond).C
+
+			for range electionTicker {
+				r.mu.Lock()
+				if r.State == StateLeader {
+					r.logger.InfoContext(r.ctx, "in leader state, ignoring election tick")
+					r.mu.Unlock()
+					return
+				}
+				if time.Since(r.electionResetTime) >= r.electionTimeout {
+					r.logger.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
+					r.State = StateCandidate
+					r.mu.Unlock()
+					return
+				}
+				r.mu.Unlock()
+			}
 		}
-		if time.Since(r.electionResetTime) >= r.electionTimeout {
-			r.logger.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
-			r.State = StateCandidate
-			r.mu.Unlock()
-			return
-		}
-		r.mu.Unlock()
 	}
 }
 
@@ -58,8 +66,6 @@ func (r *Raft) electionTimer() {
 // its term to the higher term.
 func (r *Raft) requestVotes() error {
 	r.logger.InfoContext(r.ctx, "requesting votes, locking mutex")
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	currentTerm, err := r.currentTerm()
 	if err != nil {
 		return err
@@ -81,7 +87,9 @@ func (r *Raft) requestVotes() error {
 		if peerTerm > currentTerm {
 			r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
 			// TODO: set leader
+			r.mu.Lock()
 			r.State = StateFollower
+			r.mu.Unlock()
 			return nil
 		}
 		if voteGranted {
@@ -98,7 +106,9 @@ func (r *Raft) requestVotes() error {
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("voting results: %t", wonElection))
 	if wonElection {
 		r.logger.InfoContext(r.ctx, "won election, setting state to leader")
+		r.mu.Lock()
 		r.State = StateLeader
+		r.mu.Unlock()
 	}
 
 	return nil
@@ -116,7 +126,10 @@ func (r *Raft) countVotes() (bool, error) {
 	// convert to follower
 	if votedFor != r.id {
 		r.logger.InfoContext(r.ctx, "server did not vote for self, setting to -1 and converting to follower state")
+
+		r.mu.Lock()
 		r.State = StateFollower
+		r.mu.Unlock()
 		if err := r.setVotedFor(-1); err != nil {
 			return false, err
 		}
@@ -143,29 +156,36 @@ func (r *Raft) countVotes() (bool, error) {
 // candidateState handles the logic for when a server turns to a candidate,
 // the election timeout is reset and votes are requested from peers
 func (r *Raft) candidateState() error {
-	r.logger.InfoContext(r.ctx, "candidate state identified")
-	r.logger.InfoContext(r.ctx, "locking mutex")
-	r.mu.Lock()
-	currentTerm, err := r.currentTerm()
-	if err != nil {
-		return fmt.Errorf("failed to get current term: %w", err)
-	}
-	currentTerm += 1
-	r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
-	if err := r.setCurrentTerm(currentTerm); err != nil {
-		return fmt.Errorf("failed to set current term: %w", err)
-	}
-	r.mu.Unlock()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return nil
+		default:
+			r.logger.InfoContext(r.ctx, "candidate state identified")
+			r.logger.InfoContext(r.ctx, "locking mutex")
+			r.mu.Lock()
+			currentTerm, err := r.currentTerm()
+			if err != nil {
+				return fmt.Errorf("candidate - failed to get current term: %w", err)
+			}
+			currentTerm += 1
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
+			if err := r.setCurrentTerm(currentTerm); err != nil {
+				return fmt.Errorf("failed to set current term: %w", err)
+			}
+			r.mu.Unlock()
 
-	r.logger.InfoContext(r.ctx, "voting for itself")
-	if err := r.setVotedFor(r.id); err != nil {
-		return fmt.Errorf("failed to vote for self: %w", err)
-	}
+			r.logger.InfoContext(r.ctx, "voting for itself")
+			if err := r.setVotedFor(r.id); err != nil {
+				return fmt.Errorf("failed to vote for self: %w", err)
+			}
 
-	r.resetElectionTimeout()
-	r.logger.InfoContext(r.ctx, "requesting votes")
-	if err := r.requestVotes(); err != nil {
-		return err
+			r.resetElectionTimeout()
+			r.logger.InfoContext(r.ctx, "requesting votes")
+			if err := r.requestVotes(); err != nil {
+				return err
+			}
+			return nil
+		}
 	}
-	return nil
 }
