@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,16 +9,14 @@ import (
 	"log"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/tashima42/raft/database"
+	"github.com/tashima42/raft/keyval"
 	"github.com/tashima42/raft/proto"
 	"github.com/tashima42/raft/raft"
 	"github.com/tashima42/raft/transport"
@@ -39,7 +36,6 @@ type ServerConfig struct {
 
 var Version = "dev"
 
-// https://github.com/raeperd/kickstart.go/blob/main/main.go
 func main() {
 	if err := run(context.Background(), os.Stdout, Version); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
@@ -71,14 +67,20 @@ func run(ctx context.Context, w io.Writer, version string) error {
 		return fmt.Errorf("failed to start grpcClient: %w", err)
 	}
 
-	r, err := raft.NewRaft(ctx, db, grpcClient, serverConfig.ServerID, peers, serverConfig.InitializationCooldownSeconds)
+	sendRaftLogsChan := make(chan raft.LogEntry)
+
+	r, err := raft.NewRaft(ctx, db, grpcClient, serverConfig.ServerID, peers, serverConfig.InitializationCooldownSeconds, sendRaftLogsChan)
 	if err != nil {
 		return fmt.Errorf("failed to start raft: %w", err)
 	}
 
+	kv := keyval.NewKeyVal(r.C(), sendRaftLogsChan)
+
+	kv.Get("key")
+
 	go r.Run()
 
-	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	ctx, _ = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", serverConfig.Port))
 	if err != nil {
@@ -88,25 +90,12 @@ func run(ctx context.Context, w io.Writer, version string) error {
 	grpcServer := &transport.GRPCServer{Raft: r}
 	proto.RegisterRaftServer(s, grpcServer)
 
-	httpServer := &http.Server{
-		Addr:              fmt.Sprintf(":%d", serverConfig.APIPort),
-		Handler:           route(slog.Default(), version, r),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
 	errChan := make(chan error, 1)
 
 	go func() {
 		slog.InfoContext(ctx, "grpc server started", slog.Uint64("port", uint64(serverConfig.Port)), slog.String("version", version))
 		if err := s.Serve(lis); err != nil {
 			errChan <- fmt.Errorf("grpc server: %w", err)
-		}
-	}()
-
-	go func() {
-		slog.InfoContext(ctx, "server started", slog.Uint64("port", uint64(serverConfig.APIPort)), slog.String("version", version))
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errChan <- err
 		}
 	}()
 
@@ -120,17 +109,6 @@ func run(ctx context.Context, w io.Writer, version string) error {
 			return fmt.Errorf("failed to gracefully shutdown raft: %w", err)
 		}
 
-		// Create a new context for shutdown with timeout
-		ctx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-
-		// Shutdown the HTTP server first
-		if err := httpServer.Shutdown(ctx); err != nil {
-			return fmt.Errorf("server shutdown: %w", err)
-		}
-
-		// After server is shutdown, cancel the main context to close other resources
-		cancel()
 		return nil
 	}
 }
@@ -200,154 +178,30 @@ func parseFlags() (ServerConfig, error) {
 	}, nil
 }
 
-// route sets up and returns an [http.Handler] for all the server routes.
-// It is the single source of truth for all the routes.
-// You can add custom [http.Handler] as needed.
-func route(log *slog.Logger, version string, r *raft.Raft) http.Handler {
-	mux := http.NewServeMux()
-
-	mux.Handle("GET /health", handleGetHealth(version))
-	// mux.HandleFunc("POST /entries", handleAppendEntries(r))
-	// mux.HandleFunc("POST /request-vote", handleRequestVote(r))
-
-	apiMux := http.NewServeMux()
-	apiMux.HandleFunc("GET /api/key/{key}", handleGetKeyValue(r))
-	apiMux.HandleFunc("PUT /api/key", handleSetKeyValue(r))
-
-	middleware := forwardToLeader(r)
-	mux.Handle("/api/", middleware(apiMux))
-
-	handler := accesslog(mux, log)
-	handler = recovery(handler, log)
-	return handler
-}
-
-func forwardToLeader(r *raft.Raft) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if r.IsLeader() {
-				next.ServeHTTP(w, req)
-				return
-			}
-
-			leaderAddr, err := r.LeaderAPIAddress()
-			if err != nil {
-				http.Error(w, "Failed to get leader address: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			if leaderAddr == "" {
-				http.Error(w, "Leader not found", http.StatusInternalServerError)
-				return
-			}
-
-			targetURL := leaderAddr + req.URL.Path
-			if req.URL.RawQuery != "" {
-				targetURL += "?" + req.URL.RawQuery
-			}
-
-			http.Redirect(w, req, targetURL, http.StatusTemporaryRedirect)
-		})
-	}
-}
-
-// accesslog is a middleware that logs request and response details,
-// including latency, method, path, query parameters, IP address, response status, and bytes sent.
-func accesslog(next http.Handler, log *slog.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		wr := responseRecorder{ResponseWriter: w}
-
-		next.ServeHTTP(&wr, r)
-
-		log.InfoContext(r.Context(), "accessed",
-			slog.String("latency", time.Since(start).String()),
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.String("query", r.URL.RawQuery),
-			slog.String("ip", r.Header.Get("X-Real-IP")),
-			slog.Int("status", wr.status),
-			slog.Int("bytes", wr.numBytes))
-	})
-}
-
-// recovery is a middleware that recovers from panics during HTTP handler execution and logs the error details.
-// It must be the last middleware in the chain to ensure it captures all panics.
-func recovery(next http.Handler, log *slog.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wr := responseRecorder{ResponseWriter: w}
-		defer func() {
-			err := recover()
-			if err == nil {
-				return
-			}
-
-			if err, ok := err.(error); ok && errors.Is(err, http.ErrAbortHandler) {
-				// Handle the abort gracefully
-				return
-			}
-
-			stack := make([]byte, 1024)
-			n := runtime.Stack(stack, true)
-
-			log.ErrorContext(r.Context(), "panic!",
-				slog.Any("error", err),
-				slog.String("stack", string(stack[:n])),
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.String("query", r.URL.RawQuery),
-				slog.String("ip", r.RemoteAddr))
-
-			if wr.status > 0 {
-				// response was already sent, nothing we can do
-				return
-			}
-
-			// send error response
-			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
-		}()
-		next.ServeHTTP(&wr, r)
-	})
-}
-
-// responseRecorder is a wrapper around [http.ResponseWriter] that records the status and bytes written during the response.
-// It implements the [http.ResponseWriter] interface by embedding the original ResponseWriter.
-type responseRecorder struct {
-	http.ResponseWriter
-	status   int
-	numBytes int
-}
-
-// Header implements the [http.ResponseWriter] interface.
-func (re *responseRecorder) Header() http.Header {
-	return re.ResponseWriter.Header()
-}
-
-// Write implements the [http.ResponseWriter] interface.
-func (re *responseRecorder) Write(b []byte) (int, error) {
-	re.numBytes += len(b)
-	return re.ResponseWriter.Write(b)
-}
-
-// WriteHeader implements the [http.ResponseWriter] interface.
-func (re *responseRecorder) WriteHeader(statusCode int) {
-	re.status = statusCode
-	re.ResponseWriter.WriteHeader(statusCode)
-}
-
-// https://grafana.com/blog/2024/02/09/how-i-write-http-services-in-go-after-13-years
-func encode[T any](w http.ResponseWriter, _ *http.Request, status int, v T) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		return fmt.Errorf("encode json: %w", err)
-	}
-	return nil
-}
-
-func decode[T any](r *http.Request) (T, error) {
-	var v T
-	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
-		return v, fmt.Errorf("decode json: %w", err)
-	}
-	return v, nil
-}
+// func forwardToLeader(r *raft.Raft) func(http.Handler) http.Handler {
+// 	return func(next http.Handler) http.Handler {
+// 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+// 			if r.IsLeader() {
+// 				next.ServeHTTP(w, req)
+// 				return
+// 			}
+//
+// 			leaderAddr, err := r.LeaderAPIAddress()
+// 			if err != nil {
+// 				http.Error(w, "Failed to get leader address: "+err.Error(), http.StatusInternalServerError)
+// 				return
+// 			}
+// 			if leaderAddr == "" {
+// 				http.Error(w, "Leader not found", http.StatusInternalServerError)
+// 				return
+// 			}
+//
+// 			targetURL := leaderAddr + req.URL.Path
+// 			if req.URL.RawQuery != "" {
+// 				targetURL += "?" + req.URL.RawQuery
+// 			}
+//
+// 			http.Redirect(w, req, targetURL, http.StatusTemporaryRedirect)
+// 		})
+// 	}
+// }
