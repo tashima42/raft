@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"sync"
 	"time"
 )
 
@@ -72,31 +73,47 @@ func (r *Raft) requestVotes() error {
 	}
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	// TODO: issue parallel vote requests and use channels for sync
+	wg := &sync.WaitGroup{}
+	electionCtx, electionCancel := context.WithCancel(r.ctx)
+	defer electionCancel()
 	for _, peer := range r.peers {
-		r.logger.InfoContext(r.ctx, "requesting vote from: "+peer.Address())
-		// TODO: implement last log
-		tCtx, cancel := context.WithTimeout(r.ctx, time.Second*1)
-		defer cancel()
-		peerTerm, voteGranted, err := r.Client.RequestVote(tCtx, *peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
-		if err != nil {
-			r.logger.ErrorContext(r.ctx, "failed to get response from request vote: "+err.Error())
-			peerTerm = -1
-			voteGranted = false
-		}
-		r.logger.InfoContext(r.ctx, fmt.Sprintf("request vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
-		if peerTerm > currentTerm {
-			r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
-			// TODO: set leader
-			r.mu.Lock()
-			r.State = StateFollower
-			r.mu.Unlock()
-			return nil
-		}
-		if voteGranted {
-			r.logger.InfoContext(r.ctx, "vote granted, setting peer voted for")
-			peer.SetVotedFor(r.id)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-electionCtx.Done():
+					return
+				default:
+					r.logger.InfoContext(electionCtx, "requesting vote from: "+peer.Address())
+					// TODO: implement last log
+					tCtx, tCancel := context.WithTimeout(electionCtx, time.Second*1)
+					defer tCancel()
+					peerTerm, voteGranted, err := r.Client.RequestVote(tCtx, *peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: 0, LastLogTerm: 0})
+					if err != nil {
+						r.logger.ErrorContext(r.ctx, "failed to get response from request vote: "+err.Error())
+						peerTerm = -1
+						voteGranted = false
+					}
+					r.logger.InfoContext(r.ctx, fmt.Sprintf("request vote response peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
+					if peerTerm > currentTerm {
+						r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
+						// TODO: set leader
+						r.mu.Lock()
+						r.State = StateFollower
+						r.mu.Unlock()
+						electionCancel()
+						return
+					}
+					if voteGranted {
+						r.logger.InfoContext(r.ctx, "vote granted, setting peer voted for")
+						peer.SetVotedFor(r.id)
+					}
+				}
+			}
+		}()
 	}
+	wg.Wait()
 
 	r.logger.InfoContext(r.ctx, "counting votes")
 	wonElection, err := r.countVotes()
@@ -110,7 +127,6 @@ func (r *Raft) requestVotes() error {
 		r.State = StateLeader
 		r.mu.Unlock()
 	}
-
 	return nil
 }
 
