@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	minimumElectionTimeoutMS int64 = 500
+	minimumElectionTimeoutMS int64 = 150
 	maximumElectionTimeoutMS int64 = 2 * minimumElectionTimeoutMS
 )
 
@@ -51,6 +51,19 @@ func (r *Raft) electionTimer() {
 				}
 				if time.Since(r.electionResetTime) >= r.electionTimeout {
 					r.logger.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
+
+					currentTerm, err := r.currentTerm()
+					if err != nil {
+						r.logger.ErrorContext(r.ctx, "candidate - failed to get current term: "+err.Error())
+						return
+					}
+					currentTerm += 1
+					r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
+					if err := r.setCurrentTerm(currentTerm); err != nil {
+						r.logger.ErrorContext(r.ctx, "failed to set current term: "+err.Error())
+						r.mu.Unlock()
+						return
+					}
 					r.State = StateCandidate
 					r.mu.Unlock()
 					return
@@ -155,7 +168,7 @@ func (r *Raft) countVotes() (bool, error) {
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("majority of votes is smaller than current total votes: totalVotes %d < majority %d", totalVotes, majority))
 		return false, nil
 	}
-	r.logger.InfoContext(r.ctx, fmt.Sprintf("total votes: %d > %d, returning true for elected", totalVotes, majority))
+	r.logger.InfoContext(r.ctx, fmt.Sprintf("total votes: %d >= %d, returning true for elected", totalVotes, majority))
 	return true, nil
 }
 
@@ -168,18 +181,6 @@ func (r *Raft) candidateState() error {
 			return nil
 		default:
 			r.logger.InfoContext(r.ctx, "candidate state identified")
-			r.logger.InfoContext(r.ctx, "locking mutex")
-			r.mu.Lock()
-			currentTerm, err := r.currentTerm()
-			if err != nil {
-				return fmt.Errorf("candidate - failed to get current term: %w", err)
-			}
-			currentTerm += 1
-			r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
-			if err := r.setCurrentTerm(currentTerm); err != nil {
-				return fmt.Errorf("failed to set current term: %w", err)
-			}
-			r.mu.Unlock()
 
 			r.logger.InfoContext(r.ctx, "voting for itself")
 			if err := r.setVotedFor(r.id); err != nil {

@@ -122,14 +122,14 @@ func (g *grpcClient) RequestVote(ctx context.Context, peer Peer, req RequestVote
 	if client == nil {
 		return -1, false, fmt.Errorf("client not found for peer id: %d", peer.ID())
 	}
-	r, err := (*client).RequestVote(ctx, &rvr)
+	res, err := (*client).RequestVote(ctx, &rvr)
 	if err != nil {
 		return -1, false, fmt.Errorf("failed to send request vote rpc: %w", err)
 	}
-	if r == nil {
+	if res == nil {
 		return -1, false, errors.New("nil response from request vote")
 	}
-	return int(r.Term), r.VoteGranted, nil
+	return int(res.Term), res.VoteGranted, nil
 }
 
 func (g *grpcClient) Close() error {

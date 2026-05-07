@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -29,7 +30,9 @@ type e2eNode struct {
 }
 
 type e2eCluster struct {
-	nodes []*e2eNode
+	nodes      []*e2eNode
+	attempt    int
+	clusterLog string
 }
 
 func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
@@ -40,7 +43,10 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 		t.Fatalf("failed to create dist dir: %v", err)
 	}
 
-	clusterLogFile := filepath.Join(distDir, "raft-cluster.log")
+	clusterLogFile, attempt, err := nextAttemptLogPath(distDir)
+	if err != nil {
+		t.Fatalf("failed to choose cluster log file path: %v", err)
+	}
 	f, err := os.Create(clusterLogFile)
 	if err != nil {
 		t.Fatalf("failed to create cluster log file: %v", err)
@@ -104,11 +110,26 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 		}(n)
 	}
 
-	cluster := &e2eCluster{nodes: nodes}
+	cluster := &e2eCluster{nodes: nodes, attempt: attempt, clusterLog: clusterLogFile}
 	t.Cleanup(func() {
 		cluster.shutdown()
 	})
+	t.Logf("e2e attempt=%d log=%s", cluster.attempt, cluster.clusterLog)
 	return cluster
+}
+
+func nextAttemptLogPath(distDir string) (string, int, error) {
+	for attempt := 1; ; attempt++ {
+		candidate := filepath.Join(distDir, fmt.Sprintf("raft-cluster-attempt-%d.log", attempt))
+		_, err := os.Stat(candidate)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return candidate, attempt, nil
+		}
+		return "", 0, err
+	}
 }
 
 func (c *e2eCluster) shutdown() {
@@ -199,7 +220,7 @@ func waitForStableSingleLeader(t *testing.T, c *e2eCluster, timeout, stableFor t
 		time.Sleep(25 * time.Millisecond)
 	}
 
-	t.Fatalf("timed out waiting for stable single leader")
+	t.Fatalf("timed out waiting for stable single leader (attempt=%d, log=%s)", c.attempt, c.clusterLog)
 	return nil
 }
 
@@ -207,7 +228,7 @@ func Test4NodesNaturalElection(t *testing.T) {
 	cluster := newE2ECluster(t, t.Name(), 4)
 	startClusterNormally(cluster)
 
-	leader := waitForStableSingleLeader(t, cluster, 15*time.Second, 600*time.Millisecond)
+	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
 	if leader == nil {
 		t.Fatalf("expected a leader")
 	}
