@@ -35,12 +35,21 @@ type pageData struct {
 	GeneratedAt string
 	Sources     []string
 	Rows        []alignedRow
+	Page        int
+	TotalPages  int
+	TotalRows   int
+	HasPrev     bool
+	HasNext     bool
+	PrevPage    int
+	NextPage    int
 }
 
 type alignedRow struct {
 	Time  string
 	Cells []string
 }
+
+const rowsPerPage = 500
 
 var timeLayouts = []string{
 	time.RFC3339Nano,
@@ -128,9 +137,14 @@ tr:nth-child(even) td {
 <body>
 <header>
 	<h1>Raft Log Viewer</h1>
-	<p>Generated at {{.GeneratedAt}} | Sources: {{len .Sources}} | Rows: {{len .Rows}}</p>
+	<p>Generated at {{.GeneratedAt}} | Sources: {{len .Sources}} | Showing rows: {{len .Rows}} / {{.TotalRows}} | Page {{.Page}}/{{.TotalPages}}</p>
 </header>
 <div class="container">
+	<div style="margin: 0 0 10px; font-size: 12px;">
+		{{if .HasPrev}}<a href="/?page={{.PrevPage}}">Previous</a>{{end}}
+		{{if and .HasPrev .HasNext}} | {{end}}
+		{{if .HasNext}}<a href="/?page={{.NextPage}}">Next</a>{{end}}
+	</div>
 	<div class="table-wrap">
 		<table>
 			<thead>
@@ -154,6 +168,11 @@ tr:nth-child(even) td {
 				{{end}}
 			</tbody>
 		</table>
+	</div>
+	<div style="margin: 0 0 10px; font-size: 12px;">
+		{{if .HasPrev}}<a href="/?page={{.PrevPage}}">Previous</a>{{end}}
+		{{if and .HasPrev .HasNext}} | {{end}}
+		{{if .HasNext}}<a href="/?page={{.NextPage}}">Next</a>{{end}}
 	</div>
 </div>
 </body>
@@ -200,7 +219,15 @@ func (s *viewerServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := buildPageData(logs, s.showPath)
+	page := 1
+	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+		p, convErr := strconv.Atoi(raw)
+		if convErr == nil && p > 0 {
+			page = p
+		}
+	}
+
+	data := buildPageData(logs, s.showPath, page)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -230,7 +257,7 @@ func loadLogs(paths []string) ([]fileLogs, error) {
 	return logs, nil
 }
 
-func buildPageData(logs []fileLogs, showPath bool) pageData {
+func buildPageData(logs []fileLogs, showPath bool, page int) pageData {
 	sources := make([]string, len(logs))
 	for i, lf := range logs {
 		header := lf.Path
@@ -240,12 +267,43 @@ func buildPageData(logs []fileLogs, showPath bool) pageData {
 		sources[i] = header
 	}
 
-	rows := alignRows(logs)
+	allRows := alignRows(logs)
+	totalRows := len(allRows)
+	totalPages := 1
+	if totalRows > 0 {
+		totalPages = (totalRows + rowsPerPage - 1) / rowsPerPage
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+
+	start := (page - 1) * rowsPerPage
+	if start > totalRows {
+		start = totalRows
+	}
+	end := start + rowsPerPage
+	if end > totalRows {
+		end = totalRows
+	}
+
+	rows := allRows[start:end]
+	hasPrev := page > 1
+	hasNext := page < totalPages
 
 	return pageData{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		Sources:     sources,
 		Rows:        rows,
+		Page:        page,
+		TotalPages:  totalPages,
+		TotalRows:   totalRows,
+		HasPrev:     hasPrev,
+		HasNext:     hasNext,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
 	}
 }
 
