@@ -303,8 +303,16 @@ func (r *Raft) Run() {
 						// slog.InfoContext(r.ctx, "follower state")
 					case StateCandidate:
 						r.logger.InfoContext(r.ctx, "candidate state")
-						if err := r.candidateState(); err != nil {
-							log.Fatal(err.Error())
+
+						r.mu.Lock()
+						electionResetTime := r.electionResetTime
+						electionTimeout := r.electionTimeout
+						r.mu.Unlock()
+
+						if time.Since(electionResetTime) >= electionTimeout {
+							if err := r.candidateState(); err != nil {
+								r.logger.ErrorContext(r.ctx, "error on candidate state: "+err.Error())
+							}
 						}
 					case StateLeader:
 						r.logger.InfoContext(r.ctx, "leader state")
@@ -378,14 +386,13 @@ func (r *Raft) sendHeartBeats() error {
 // of the cluster. If a quorum is not achieved, the log entries are removed and an error is returned
 func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if r.State != StateLeader {
 		r.logger.InfoContext(r.ctx, "not in leader state, cannot send append entries")
+		r.mu.Unlock()
 		return errors.New("cannot send append entries when not in leader state")
 	}
-
 	r.heartbeatResetTime = time.Now()
+	r.mu.Unlock()
 
 	currentTerm, err := r.currentTerm()
 	if err != nil {
@@ -426,6 +433,13 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 			success = false
 			term = -1
 		}
+		if term > currentTerm {
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
+			r.mu.Lock()
+			r.State = StateFollower
+			r.mu.Unlock()
+			return nil
+		}
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
 		if !success {
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
@@ -433,11 +447,6 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 			continue
 		}
 		totalSuccess += 1
-		if term > currentTerm {
-			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
-			r.State = StateFollower
-			return nil
-		}
 	}
 	if checkQuorum && totalSuccess < quorum {
 		return ErrQuorumNotReached

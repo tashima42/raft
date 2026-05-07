@@ -9,9 +9,6 @@ import (
 func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	// reset election timeout and prevent server from starting new elections
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("received append entries request: %+v", req))
-	r.resetElectionTimeout()
-	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	currentTerm, err := r.currentTerm()
 	if err != nil {
@@ -24,6 +21,15 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		return false, currentTerm, nil
 	}
 
+	// TODO: if there is a conflict with the existing log, delete the existing log and all that follow it
+	if currentTerm != req.Term {
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting current term to %d", req.Term))
+		if err := r.setCurrentTerm(req.Term); err != nil {
+			return false, currentTerm, fmt.Errorf("failed to set current term: %w", err)
+		}
+		currentTerm = req.Term
+	}
+
 	// if req.PrevLogIndex
 	prevLogTerm, err := r.prevLogTerm()
 	if err != nil {
@@ -33,18 +39,7 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		return false, currentTerm, nil
 	}
 
-	// TODO: if there is a conflict with the existing log, delete the existing log and all that follow it
-
-	r.logger.InfoContext(r.ctx, fmt.Sprintf("setting current term to %d", req.Term))
-	if err := r.setCurrentTerm(req.Term); err != nil {
-		return false, currentTerm, fmt.Errorf("failed to set current term: %w", err)
-	}
-
-	currentTerm = req.Term
 	r.logger.InfoContext(r.ctx, "appending entries to log")
-	if err := r.appendLogs(req.Entries); err != nil {
-		return false, currentTerm, fmt.Errorf("failed to append logs: %w", err)
-	}
 	// (§5.3)
 	r.logger.InfoContext(r.ctx, "getting count log")
 	logCount, err := r.logCount()
@@ -73,16 +68,14 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		return false, currentTerm, fmt.Errorf("failed to set leader id: %w", err)
 	}
 
+	r.resetElectionTimeout()
 	r.logger.InfoContext(r.ctx, "replying true")
 	return true, currentTerm, nil
 }
 
 func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("received request vote request: %+v", req))
-	r.resetElectionTimeout()
 	r.logger.InfoContext(r.ctx, "locking mutex")
-	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	currentTerm, err := r.currentTerm()
 	if err != nil {
@@ -98,6 +91,9 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 		if err := r.setCurrentTerm(currentTerm); err != nil {
 			return currentTerm, false, fmt.Errorf("failed to set current term: %w", err)
 		}
+		r.mu.Lock()
+		r.State = StateFollower
+		r.mu.Unlock()
 	}
 	votedFor, err := r.votedFor()
 	if err != nil {
@@ -115,13 +111,19 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 	}
 
 	if votedFor < 0 || votedFor == req.CandidateID {
-		if req.LastLogIndex < lastLogIndex || (req.LastLogTerm == lastLogTerm && req.LastLogIndex < lastLogIndex) {
+		if req.Term < currentTerm {
+			r.logger.InfoContext(r.ctx, "candidate's term is not as up to date as current server's term, voting false")
+			return currentTerm, false, nil
+		}
+		if (req.Term == currentTerm && req.LastLogIndex < lastLogIndex) || req.LastLogTerm > lastLogTerm {
 			r.logger.InfoContext(r.ctx, "candidate's log is not as up to date as current server's log, voting false")
 			return currentTerm, false, nil
 		}
 
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("voting for: %d", req.CandidateID))
 		err := r.setVotedFor(req.CandidateID)
+
+		r.resetElectionTimeout()
 		return currentTerm, true, err
 	}
 	r.logger.InfoContext(r.ctx, "voting false")

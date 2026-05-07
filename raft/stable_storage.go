@@ -27,10 +27,7 @@ func (r *Raft) currentTerm() (int, error) {
 // setCurrentTerm sets the current term, but also resets the votedFor to a null value (-1)
 // to prevent the server from always voting for the same candidate in the next term
 func (r *Raft) setCurrentTerm(term int) error {
-	if err := r.db.SetRaftValue(currentTermKey, strconv.Itoa(term)); err != nil {
-		return err
-	}
-	return r.setVotedFor(-1)
+	return r.db.SetRaftValue(currentTermKey, strconv.Itoa(term))
 }
 
 func (r *Raft) votedFor() (int, error) {
