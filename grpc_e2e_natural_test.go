@@ -234,6 +234,24 @@ func Test4NodesNaturalElection(t *testing.T) {
 	}
 }
 
+func Test4NodesLeaderDisconnect(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 4)
+	startClusterNormally(cluster)
+
+	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	if leader == nil {
+		t.Fatalf("expected a leader")
+	}
+
+	// disconnect leader from cluster
+	leader.server.Stop()
+
+	newLeader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	if newLeader == nil {
+		t.Fatalf("expected a new leader")
+	}
+}
+
 // func TestGRPCE2E4NodesNaturalElectionAndReplication(t *testing.T) {
 // 	cluster := newE2ECluster(t, t.Name(), 4)
 // 	startClusterNormally(cluster)
