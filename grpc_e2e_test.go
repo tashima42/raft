@@ -262,6 +262,16 @@ func Test4NodesNaturalElection(t *testing.T) {
 	}
 }
 
+func Test5NodesNaturalElection(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 5)
+	startClusterNormally(cluster)
+
+	leader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
+	if leader == nil {
+		t.Fatalf("expected a leader")
+	}
+}
+
 func Test4NodesLeaderDisconnect(t *testing.T) {
 	cluster := newE2ECluster(t, t.Name(), 4)
 	startClusterNormally(cluster)
@@ -273,6 +283,31 @@ func Test4NodesLeaderDisconnect(t *testing.T) {
 
 	// disconnect leader from cluster
 	cluster.disconnectNode(leader)
+
+	newLeader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
+	if newLeader == nil {
+		t.Fatalf("expected a new leader")
+	}
+}
+
+func Test5NodesLeaderDisconnectReconnect(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 5)
+	startClusterNormally(cluster)
+
+	leader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
+	if leader == nil {
+		t.Fatalf("expected a leader")
+	}
+
+	// disconnect leader from cluster
+	cluster.disconnectNode(leader)
+	// disconnect another node to create a minority partition and make sure the cluster doesn't elect a new leader until it has a majority again
+	cluster.disconnectNode(cluster.nodeByID((leader.id % 5) + 1))
+	time.Sleep(time.Second * 4)
+	// reconnect the first disconnected leader to restore majority
+	cluster.nodeByID(leader.id).offline = false
+	go cluster.nodeByID(leader.id).kv.Run()
+	go cluster.nodeByID(leader.id).raft.Run()
 
 	newLeader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
 	if newLeader == nil {
