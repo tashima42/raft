@@ -50,7 +50,12 @@ type pageData struct {
 
 type alignedRow struct {
 	Time  string
-	Cells []string
+	Cells []displayCell
+}
+
+type displayCell struct {
+	Message string
+	Class   string
 }
 
 type fileOption struct {
@@ -139,6 +144,14 @@ td.message {
 	white-space: pre-wrap;
 	word-break: break-word;
 }
+td.message.kv {
+	color: #1d4ed8;
+	background: #eff6ff;
+}
+td.message.err {
+	color: #b91c1c;
+	background: #fee2e2;
+}
 tr:nth-child(even) td {
 	background: #fffdf8;
 }
@@ -193,8 +206,8 @@ tr:nth-child(even) td {
 				<tr>
 					<td class="time-col">{{.Time}}</td>
 					{{range .Cells}}
-						{{if .}}
-						<td class="message">{{.}}</td>
+						{{if .Message}}
+						<td class="message {{.Class}}">{{.Message}}</td>
 						{{else}}
 						<td class="message empty">&nbsp;</td>
 						{{end}}
@@ -494,21 +507,21 @@ func alignRows(logs []fileLogs) []alignedRow {
 			break
 		}
 
-		cells := make([]string, len(logs))
+		cells := make([]displayCell, len(logs))
 		for i := range logs {
 			if indices[i] >= len(logs[i].Entries) {
-				cells[i] = ""
+				cells[i] = displayCell{}
 				continue
 			}
 
 			entry := logs[i].Entries[indices[i]]
 			if entry.Timestamp.Equal(nextTime) {
-				cells[i] = extractDisplayMessage(entry.RawLine)
+				cells[i] = extractDisplayCell(entry.RawLine)
 				indices[i]++
 				continue
 			}
 
-			cells[i] = ""
+			cells[i] = displayCell{}
 		}
 
 		rows = append(rows, alignedRow{
@@ -799,4 +812,34 @@ func extractDisplayMessage(line string) string {
 	}
 
 	return line
+}
+
+func extractDisplayCell(line string) displayCell {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return displayCell{}
+	}
+
+	message := extractDisplayMessage(line)
+	fields := parseLogFmt(line)
+	classes := make([]string, 0, 2)
+
+	if isTrueLogField(fields["kv"]) {
+		classes = append(classes, "kv")
+	}
+	if isErrorLevel(fields["level"]) {
+		classes = append(classes, "err")
+	}
+
+	return displayCell{Message: message, Class: strings.Join(classes, " ")}
+}
+
+func isTrueLogField(v string) bool {
+	v = strings.TrimSpace(strings.Trim(v, "\""))
+	return strings.EqualFold(v, "true")
+}
+
+func isErrorLevel(v string) bool {
+	v = strings.TrimSpace(strings.Trim(v, "\""))
+	return strings.EqualFold(v, "error")
 }
