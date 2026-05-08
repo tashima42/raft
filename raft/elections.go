@@ -10,7 +10,7 @@ import (
 
 var (
 	minimumElectionTimeoutMS int64 = 300
-	maximumElectionTimeoutMS int64 = 2 * minimumElectionTimeoutMS
+	maximumElectionTimeoutMS int64 = 5 * minimumElectionTimeoutMS
 )
 
 // resetElectionTimeout resets the election timeout to a random valuebetween
@@ -109,8 +109,19 @@ func (r *Raft) requestVotes() error {
 			if peerTerm > currentTerm {
 				r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
 				// TODO: set leader
-				r.setCurrentTerm(peerTerm)
 				r.mu.Lock()
+				if err := r.setCurrentTerm(peerTerm); err != nil {
+					r.logger.ErrorContext(r.ctx, "failed to set current term: "+err.Error())
+					r.mu.Unlock()
+					tCancel()
+					return
+				}
+				if err := r.setVotedFor(-1); err != nil {
+					r.logger.ErrorContext(r.ctx, "failed to reset voted for: "+err.Error())
+					r.mu.Unlock()
+					tCancel()
+					return
+				}
 				r.State = StateFollower
 				r.mu.Unlock()
 				electionCancel()
@@ -126,7 +137,6 @@ func (r *Raft) requestVotes() error {
 	}
 	wg.Wait()
 
-	r.logger.InfoContext(r.ctx, "counting votes")
 	wonElection, err := r.countVotes()
 	if err != nil {
 		return err
@@ -188,24 +198,41 @@ func (r *Raft) candidateState() error {
 		default:
 			r.logger.InfoContext(r.ctx, "candidate state identified")
 
+			// Atomically increment term, self-vote, and reset timeout while holding
+			// the mutex so concurrent RequestVote RPCs cannot observe votedFor=-1
+			// in the gap between setCurrentTerm (which resets votedFor) and setVotedFor.
+			r.mu.Lock()
+			if r.State != StateCandidate {
+				// Another RPC already stepped us down; abort this round.
+				r.mu.Unlock()
+				return nil
+			}
 			currentTerm, err := r.currentTerm()
 			if err != nil {
+				r.mu.Unlock()
 				r.logger.ErrorContext(r.ctx, "candidate - failed to get current term: "+err.Error())
 				continue
 			}
 			currentTerm += 1
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 			if err := r.setCurrentTerm(currentTerm); err != nil {
+				r.mu.Unlock()
 				r.logger.ErrorContext(r.ctx, "failed to set current term: "+err.Error())
 				continue
 			}
-
+			if err := r.setVotedFor(-1); err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to reset voted for: "+err.Error())
+				r.mu.Unlock()
+				continue
+			}
 			r.logger.InfoContext(r.ctx, "voting for itself")
 			if err := r.setVotedFor(r.id); err != nil {
+				r.mu.Unlock()
 				return fmt.Errorf("failed to vote for self: %w", err)
 			}
+			r.resetElectionTimeoutLocked()
+			r.mu.Unlock()
 
-			r.resetElectionTimeout()
 			r.logger.InfoContext(r.ctx, "requesting votes")
 			if err := r.requestVotes(); err != nil {
 				return err

@@ -302,8 +302,6 @@ func (r *Raft) Run() {
 					case StateFollower:
 						// slog.InfoContext(r.ctx, "follower state")
 					case StateCandidate:
-						r.logger.InfoContext(r.ctx, "candidate state")
-
 						r.mu.Lock()
 						electionResetTime := r.electionResetTime
 						electionTimeout := r.electionTimeout

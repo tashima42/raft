@@ -27,6 +27,7 @@ type e2eNode struct {
 	server   *grpc.Server
 	raft     *raft.Raft
 	kv       *keyval.KeyVal
+	offline  bool
 }
 
 type e2eCluster struct {
@@ -134,16 +135,27 @@ func nextAttemptLogPath(distDir string) (string, int, error) {
 
 func (c *e2eCluster) shutdown() {
 	for _, n := range c.nodes {
-		if n.server != nil {
-			n.server.Stop()
-		}
-		if n.listener != nil {
-			_ = n.listener.Close()
-		}
-		if n.raft != nil {
-			_ = n.raft.GracefullyShutDown()
-		}
+		c.disconnectNode(n)
 	}
+}
+
+func (c *e2eCluster) disconnectNode(n *e2eNode) {
+	if n == nil || n.offline {
+		return
+	}
+	if n.server != nil {
+		n.server.Stop()
+		n.server = nil
+	}
+	if n.listener != nil {
+		_ = n.listener.Close()
+		n.listener = nil
+	}
+	if n.raft != nil {
+		_ = n.raft.GracefullyShutDown()
+		n.raft = nil
+	}
+	n.offline = true
 }
 
 func (c *e2eCluster) nodeByID(id int) *e2eNode {
@@ -210,6 +222,9 @@ func waitForStableSingleLeader(t *testing.T, c *e2eCluster, timeout, stableFor t
 		leaders := 0
 		leaderID := -1
 		for _, n := range c.nodes {
+			if n.offline || n.raft == nil {
+				continue
+			}
 			if n.raft.IsLeader() {
 				leaders++
 				leaderID = n.id
@@ -241,7 +256,7 @@ func Test4NodesNaturalElection(t *testing.T) {
 	cluster := newE2ECluster(t, t.Name(), 4)
 	startClusterNormally(cluster)
 
-	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	leader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
 	if leader == nil {
 		t.Fatalf("expected a leader")
 	}
@@ -251,17 +266,15 @@ func Test4NodesLeaderDisconnect(t *testing.T) {
 	cluster := newE2ECluster(t, t.Name(), 4)
 	startClusterNormally(cluster)
 
-	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	leader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
 	if leader == nil {
 		t.Fatalf("expected a leader")
 	}
 
 	// disconnect leader from cluster
-	if err := leader.raft.GracefullyShutDown(); err != nil {
-		t.Error(err)
-	}
+	cluster.disconnectNode(leader)
 
-	newLeader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	newLeader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
 	if newLeader == nil {
 		t.Fatalf("expected a new leader")
 	}
@@ -271,7 +284,7 @@ func Test4NodesNaturalElectionWithIncreasingStartupDelays(t *testing.T) {
 	cluster := newE2ECluster(t, t.Name(), 4)
 	startClusterWithIncreasingStartupDelays(cluster, 100*time.Millisecond)
 
-	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	leader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
 	if leader == nil {
 		t.Fatalf("expected a leader")
 	}
@@ -281,17 +294,15 @@ func Test4NodesLeaderDisconnectWithIncreasingStartupDelays(t *testing.T) {
 	cluster := newE2ECluster(t, t.Name(), 4)
 	startClusterWithIncreasingStartupDelays(cluster, 100*time.Millisecond)
 
-	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	leader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
 	if leader == nil {
 		t.Fatalf("expected a leader")
 	}
 
 	// disconnect leader from cluster
-	if err := leader.raft.GracefullyShutDown(); err != nil {
-		t.Error(err)
-	}
+	cluster.disconnectNode(leader)
 
-	newLeader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	newLeader := waitForStableSingleLeader(t, cluster, 25*time.Second, 4*time.Second)
 	if newLeader == nil {
 		t.Fatalf("expected a new leader")
 	}

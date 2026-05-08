@@ -27,6 +27,9 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		if err := r.setCurrentTerm(req.Term); err != nil {
 			return false, currentTerm, fmt.Errorf("failed to set current term: %w", err)
 		}
+		if err := r.setVotedFor(-1); err != nil {
+			return false, currentTerm, fmt.Errorf("failed to set voted for: %w", err)
+		}
 		currentTerm = req.Term
 	}
 
@@ -93,6 +96,9 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 		if err := r.setCurrentTerm(currentTerm); err != nil {
 			return currentTerm, false, fmt.Errorf("failed to set current term: %w", err)
 		}
+		if err := r.setVotedFor(-1); err != nil {
+			return currentTerm, false, fmt.Errorf("failed to set voted for: %w", err)
+		}
 		r.State = StateFollower
 		r.resetElectionTimeoutLocked()
 	}
@@ -121,7 +127,7 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 			return currentTerm, false, nil
 		}
 
-		r.logger.InfoContext(r.ctx, fmt.Sprintf("voting for: %d", req.CandidateID))
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("voting true for: %d", req.CandidateID))
 		err := r.setVotedFor(req.CandidateID)
 		r.State = StateFollower
 		r.resetElectionTimeoutLocked()
