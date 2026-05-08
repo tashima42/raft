@@ -197,14 +197,21 @@ func (r *Raft) initLog() error {
 func (r *Raft) sendLogToClient(entry []byte) error {
 	errChan := make(chan error, 1)
 
-	r.sendLogsChan <- LogEntry{
-		Entry:   entry,
-		ErrChan: errChan,
+	select {
+	case r.sendLogsChan <- LogEntry{Entry: entry, ErrChan: errChan}:
+		r.logger.InfoContext(r.ctx, "log sent to client, waiting for response")
+		select {
+		case <-r.ctx.Done():
+			r.logger.InfoContext(r.ctx, "context cancelled while waiting for reply from raft")
+			return context.Canceled
+		case err := <-errChan:
+			r.logger.InfoContext(r.ctx, "send log to client response received")
+			return err
+		}
+	case <-r.ctx.Done():
+		r.logger.InfoContext(r.ctx, "context cancelled while waiting for reply from raft")
+		return context.Canceled
 	}
-
-	err := <-errChan
-
-	return err
 }
 
 // IsLeader returns true if the server is currently the leader, false otherwise
@@ -331,13 +338,11 @@ func (r *Raft) listenForEntries() {
 			r.logger.InfoContext(r.ctx, "cancel command received, closing.")
 			return
 		case entry := <-r.receiveLogsChan:
-			r.mu.Lock()
 			if err := r.addToLog(entry.Entry); err != nil {
 				entry.ErrChan <- err
-				r.mu.Unlock()
 				break
 			}
-			r.mu.Unlock()
+			entry.ErrChan <- nil
 		}
 	}
 }
@@ -410,44 +415,82 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 	}
 
 	quorum := 1 + ((len(r.peers) + 1) / 2)
-	totalSuccess := 1
 
+	// empty
+	psMu := &sync.Mutex{}
+	peerSuccess := make(map[int]bool, len(r.peers))
+	for _, p := range r.peers {
+		peerSuccess[p.ID()] = false
+	}
+
+	wg := &sync.WaitGroup{}
 	for _, peer := range r.peers {
-		r.logger.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d: %s", peer.ID(), peer.Address()))
-		appendEntriesReq := AppendEntriesRequest{
-			Term:         currentTerm,
-			LeaderID:     r.id,
-			PrevLogIndex: prevLogIndex,
-			PrevLogTerm:  prevLogTerm,
-			Entries:      entries,
-			LeaderCommit: leaderCommit,
-		}
-		r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
-		tCtx, cancel := context.WithTimeout(r.ctx, time.Second*1)
-		defer cancel()
-		success, term, err := r.Client.AppendEntries(tCtx, *peer, appendEntriesReq)
-		if err != nil {
-			r.logger.ErrorContext(r.ctx, "failed to send append entries request to peer: "+err.Error())
-			success = false
-			term = -1
-		}
-		if term > currentTerm {
-			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
-			r.mu.Lock()
-			r.State = StateFollower
-			r.mu.Unlock()
-			return nil
-		}
-		r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
-		if !success {
-			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
-			// TODO: implement retries
-			continue
-		}
-		totalSuccess += 1
+		wg.Add(1)
+		go func(peer *Peer, psMu *sync.Mutex, peerSuccess map[int]bool) {
+			defer wg.Done()
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d: %s", peer.ID(), peer.Address()))
+			appendEntriesReq := AppendEntriesRequest{
+				Term:         currentTerm,
+				LeaderID:     r.id,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				Entries:      entries,
+				LeaderCommit: leaderCommit,
+			}
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
+			tCtx, tCancel := context.WithTimeout(r.ctx, time.Second*1)
+			defer tCancel()
+			success, term, err := r.Client.AppendEntries(tCtx, *peer, appendEntriesReq)
+			if err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to send append entries request to peer: "+err.Error())
+				success = false
+				term = -1
+			}
+			if term > currentTerm {
+				r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
+				r.mu.Lock()
+				r.State = StateFollower
+				r.mu.Unlock()
+
+				psMu.Lock()
+				peerSuccess[peer.ID()] = false
+				psMu.Unlock()
+
+				return
+			}
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
+			if !success {
+				r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
+				// TODO: implement retries
+
+				psMu.Lock()
+				peerSuccess[peer.ID()] = false
+				psMu.Unlock()
+
+				return
+			}
+			psMu.Lock()
+			peerSuccess[peer.ID()] = true
+			psMu.Unlock()
+
+		}(peer, psMu, peerSuccess)
 	}
-	if checkQuorum && totalSuccess < quorum {
-		return ErrQuorumNotReached
+
+	wg.Wait()
+
+	if checkQuorum {
+		r.logger.InfoContext(r.ctx, "checking if quorum was achieved for append entries")
+		successCount := 1 // count self
+		for _, success := range peerSuccess {
+			if success {
+				successCount++
+			}
+		}
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries success count: %d, quorum needed: %d", successCount, quorum))
+		if successCount < quorum {
+			return ErrQuorumNotReached
+		}
 	}
+
 	return nil
 }
