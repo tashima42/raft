@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,21 +33,30 @@ type viewerServer struct {
 }
 
 type pageData struct {
-	GeneratedAt string
-	Sources     []string
-	Rows        []alignedRow
-	Page        int
-	TotalPages  int
-	TotalRows   int
-	HasPrev     bool
-	HasNext     bool
-	PrevPage    int
-	NextPage    int
+	ShowSelector bool
+	GeneratedAt  string
+	Available    []fileOption
+	Selected     []string
+	Sources      []string
+	Rows         []alignedRow
+	Page         int
+	TotalPages   int
+	TotalRows    int
+	HasPrev      bool
+	HasNext      bool
+	PrevPage     int
+	NextPage     int
 }
 
 type alignedRow struct {
 	Time  string
 	Cells []string
+}
+
+type fileOption struct {
+	Label    string
+	Value    string
+	Selected bool
 }
 
 const rowsPerPage = 500
@@ -140,14 +150,36 @@ tr:nth-child(even) td {
 <body>
 <header>
 	<h1>Raft Log Viewer</h1>
+	{{if .ShowSelector}}
+	<p>Choose one or more log files from the provided paths.</p>
+	{{else}}
 	<p>Generated at {{.GeneratedAt}} | Sources: {{len .Sources}} | Showing rows: {{len .Rows}} / {{.TotalRows}} | Page {{.Page}}/{{.TotalPages}}</p>
 	<div style="margin: 0 0 10px; font-size: 12px;">
-		{{if .HasPrev}}<a href="/?page={{.PrevPage}}">Previous</a>{{end}}
+		{{if .HasPrev}}<a href="{{pageLink .Selected .PrevPage}}">Previous</a>{{end}}
 		{{if and .HasPrev .HasNext}} | {{end}}
-		{{if .HasNext}}<a href="/?page={{.NextPage}}">Next</a>{{end}}
+		{{if .HasNext}}<a href="{{pageLink .Selected .NextPage}}">Next</a>{{end}}
+		{{if .Selected}} | <a href="/">Choose files</a>{{end}}
 	</div>
+	{{end}}
 </header>
 <div class="container">
+	{{if .ShowSelector}}
+	<form method="get" action="/" style="background: #fff; border: 1px solid #ddd; padding: 16px;">
+		<p style="margin-top: 0; font-size: 13px; color: #4b5563;">Multi-select is enabled. Pick the files you want to align and compare.</p>
+		<div style="display: grid; gap: 8px; max-height: 70vh; overflow-y: auto;">
+			{{range .Available}}
+			<label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px;">
+				<input type="checkbox" name="file" value="{{.Value}}" {{if .Selected}}checked{{end}}>
+				<span>{{.Label}}</span>
+			</label>
+			{{end}}
+		</div>
+		<div style="margin-top: 16px; display: flex; gap: 12px; align-items: center;">
+			<button type="submit">Open selected logs</button>
+			<span style="font-size: 12px; color: #6b7280;">{{len .Available}} file(s) found</span>
+		</div>
+	</form>
+	{{else}}
 	<div class="table-wrap">
 		<table>
 			<thead>
@@ -172,6 +204,7 @@ tr:nth-child(even) td {
 			</tbody>
 		</table>
 	</div>
+	{{end}}
 </div>
 </body>
 </html>`
@@ -194,10 +227,12 @@ func run(args []string) error {
 
 	paths := fs.Args()
 	if len(paths) < 1 {
-		return errors.New("please provide at least 1 log file")
+		return errors.New("please provide at least 1 log file or directory")
 	}
 
-	tmpl, err := template.New("page").Parse(pageHTML)
+	tmpl, err := template.New("page").Funcs(template.FuncMap{
+		"pageLink": buildPageLink,
+	}).Parse(pageHTML)
 	if err != nil {
 		return fmt.Errorf("parse template: %w", err)
 	}
@@ -211,7 +246,22 @@ func run(args []string) error {
 }
 
 func (s *viewerServer) handleIndex(w http.ResponseWriter, r *http.Request) {
-	logs, err := loadLogs(s.paths)
+	availableFiles, err := discoverLogFiles(s.paths)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	selected := selectedFiles(r, availableFiles)
+	if len(selected) == 0 {
+		data := buildSelectorData(availableFiles, nil)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := s.tmpl.Execute(w, data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	logs, err := loadLogs(selected)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -226,10 +276,139 @@ func (s *viewerServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := buildPageData(logs, s.showPath, page)
+	data.Selected = append([]string(nil), selected...)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func discoverLogFiles(paths []string) ([]string, error) {
+	seen := make(map[string]struct{})
+	files := make([]string, 0, len(paths))
+
+	for _, root := range paths {
+		info, err := os.Stat(root)
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", root, err)
+		}
+
+		if !info.IsDir() {
+			absPath, err := filepath.Abs(root)
+			if err != nil {
+				return nil, fmt.Errorf("abs %s: %w", root, err)
+			}
+			if _, found := seen[absPath]; !found {
+				seen[absPath] = struct{}{}
+				files = append(files, absPath)
+			}
+			continue
+		}
+
+		err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			absPath, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			if _, found := seen[absPath]; found {
+				return nil
+			}
+			seen[absPath] = struct{}{}
+			files = append(files, absPath)
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("walk %s: %w", root, err)
+		}
+	}
+
+	if len(files) == 0 {
+		return nil, errors.New("no files found in provided paths")
+	}
+
+	sort.Strings(files)
+	return files, nil
+}
+
+func selectedFiles(r *http.Request, available []string) []string {
+	allowed := make(map[string]struct{}, len(available))
+	for _, path := range available {
+		allowed[path] = struct{}{}
+	}
+
+	selected := make([]string, 0, len(available))
+	seen := make(map[string]struct{})
+	for _, raw := range r.URL.Query()["file"] {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		if _, ok := allowed[path]; !ok {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		selected = append(selected, path)
+	}
+
+	sort.Strings(selected)
+	return selected
+}
+
+func buildSelectorData(availableFiles, selected []string) pageData {
+	selectedSet := make(map[string]struct{}, len(selected))
+	for _, path := range selected {
+		selectedSet[path] = struct{}{}
+	}
+
+	options := make([]fileOption, 0, len(availableFiles))
+	for _, path := range availableFiles {
+		_, isSelected := selectedSet[path]
+		options = append(options, fileOption{
+			Label:    path,
+			Value:    path,
+			Selected: isSelected,
+		})
+	}
+
+	return pageData{
+		ShowSelector: true,
+		Available:    options,
+		Selected:     append([]string(nil), selected...),
+	}
+}
+
+func buildPageLink(selected []string, page int) string {
+	if page < 1 {
+		page = 1
+	}
+
+	parts := make([]string, 0, len(selected)+1)
+	for _, path := range selected {
+		parts = append(parts, "file="+urlQueryEscape(path))
+	}
+	parts = append(parts, "page="+strconv.Itoa(page))
+	return "/?" + strings.Join(parts, "&")
+}
+
+func urlQueryEscape(value string) string {
+	replacer := strings.NewReplacer(
+		"%", "%25",
+		" ", "%20",
+		"#", "%23",
+		"&", "%26",
+		"+", "%2B",
+		"?", "%3F",
+	)
+	return replacer.Replace(value)
 }
 
 func loadLogs(paths []string) ([]fileLogs, error) {

@@ -1,8 +1,8 @@
 VERSION=dev
 TARGET=dist/raft
-PROTO_DIR = proto
-OUT_DIR = proto
-
+PROTO_DIR=proto
+OUT_DIR=proto
+TEST_COUNT?=20
 
 default: build
 
@@ -19,7 +19,7 @@ test: clean
 	go test -v -race -timeout 30s ./...
 
 e2e: clean
-	go test -v -race -shuffle=on -count=20 ./...
+	go test -v -race -shuffle=on -count=$(TEST_COUNT) ./...
 
 term-test: clean build
 	./scripts/test.sh
