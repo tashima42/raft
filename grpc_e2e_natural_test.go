@@ -186,6 +186,19 @@ func startClusterNormally(c *e2eCluster) {
 	}
 }
 
+func startClusterWithIncreasingStartupDelays(c *e2eCluster, baseDelay time.Duration) {
+	for i, n := range c.nodes {
+		n.kv.Run()
+		go n.raft.Run()
+
+		// Apply a fixed delay between each node startup to exercise
+		// election behavior under staggered cluster boot.
+		if i < len(c.nodes)-1 {
+			time.Sleep(baseDelay)
+		}
+	}
+}
+
 func waitForStableSingleLeader(t *testing.T, c *e2eCluster, timeout, stableFor time.Duration) *e2eNode {
 	t.Helper()
 
@@ -244,7 +257,39 @@ func Test4NodesLeaderDisconnect(t *testing.T) {
 	}
 
 	// disconnect leader from cluster
-	leader.server.Stop()
+	if err := leader.raft.GracefullyShutDown(); err != nil {
+		t.Error(err)
+	}
+
+	newLeader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	if newLeader == nil {
+		t.Fatalf("expected a new leader")
+	}
+}
+
+func Test4NodesNaturalElectionWithIncreasingStartupDelays(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 4)
+	startClusterWithIncreasingStartupDelays(cluster, 100*time.Millisecond)
+
+	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	if leader == nil {
+		t.Fatalf("expected a leader")
+	}
+}
+
+func Test4NodesLeaderDisconnectWithIncreasingStartupDelays(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 4)
+	startClusterWithIncreasingStartupDelays(cluster, 100*time.Millisecond)
+
+	leader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
+	if leader == nil {
+		t.Fatalf("expected a leader")
+	}
+
+	// disconnect leader from cluster
+	if err := leader.raft.GracefullyShutDown(); err != nil {
+		t.Error(err)
+	}
 
 	newLeader := waitForStableSingleLeader(t, cluster, 20*time.Second, 600*time.Millisecond)
 	if newLeader == nil {
