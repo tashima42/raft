@@ -104,7 +104,7 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 		n.raft = r
 		n.kv = kv
 		n.server = grpc.NewServer()
-		proto.RegisterRaftServer(n.server, &transport.GRPCServer{Raft: r})
+		proto.RegisterRaftServer(n.server, &transport.RaftGRPCServer{Raft: r})
 
 		go func(node *e2eNode) {
 			_ = node.server.Serve(node.listener)

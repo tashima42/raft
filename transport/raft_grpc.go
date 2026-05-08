@@ -9,12 +9,12 @@ import (
 	"github.com/tashima42/raft/raft"
 )
 
-type GRPCServer struct {
+type RaftGRPCServer struct {
 	proto.UnimplementedRaftServer
 	Raft *raft.Raft
 }
 
-func (g *GRPCServer) AppendEntries(ctx context.Context, req *proto.AppendEntriesRequest) (*proto.AppendEntriesResponse, error) {
+func (g *RaftGRPCServer) AppendEntries(ctx context.Context, req *proto.AppendEntriesRequest) (*proto.AppendEntriesResponse, error) {
 	rar := raft.AppendEntriesRequest{
 		Term:         int(req.Term),
 		LeaderID:     int(req.LeaderID),
@@ -41,7 +41,7 @@ func (g *GRPCServer) AppendEntries(ctx context.Context, req *proto.AppendEntries
 	}, nil
 }
 
-func (g *GRPCServer) RequestVote(ctx context.Context, req *proto.RequestVoteRequest) (*proto.RequestVoteResponse, error) {
+func (g *RaftGRPCServer) RequestVote(ctx context.Context, req *proto.RequestVoteRequest) (*proto.RequestVoteResponse, error) {
 	rvr := raft.RequestVoteRequest{
 		Term:         int(req.Term),
 		CandidateID:  int(req.CandidateID),

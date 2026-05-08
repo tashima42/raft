@@ -101,7 +101,7 @@ func run(version string) error {
 		return fmt.Errorf("failed to start tcp server on port: %w", err)
 	}
 	s := grpc.NewServer()
-	grpcServer := &transport.GRPCServer{Raft: r}
+	grpcServer := &transport.RaftGRPCServer{Raft: r}
 	proto.RegisterRaftServer(s, grpcServer)
 
 	errChan := make(chan error, 1)
