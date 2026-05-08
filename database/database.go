@@ -116,7 +116,7 @@ func (d *SQLite) AppendLogs(logs []LogEntry) (err error) {
 				return err
 			}
 		}
-		if _, err := sb.WriteString("(?, ?, ?, ?)"); err != nil {
+		if _, err := sb.WriteString("(?, ?, ?)"); err != nil {
 			return err
 		}
 
