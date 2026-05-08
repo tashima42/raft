@@ -27,13 +27,13 @@ make e2e
 Manual testing:
 
 ```sh
-./dist/raft -peers-ids "2,3,4" -peers-addresses "localhost:6438,localhost:6439,localhost:6440" -peers-kv-addresses "http://localhost:5438,http://localhost:5439,http://localhost:5440" -port 6437 -kv-port 5437 -id 1 -db-location "./dist/raft-1.db" -log-location "./dist/raft-1.log"
+./dist/raft -peers-ids "2,3,4" -peers-addresses "localhost:6432,localhost:6433,localhost:6434" -peers-kv-addresses "http://localhost:5432,http://localhost:5433,http://localhost:5434" -port 6431 -kv-port 5431 -id 1 -db-location "./dist/raft-1.db" -log-location "./dist/raft-1.log"
 PIDS+=($!)
-./dist/raft -peers-ids "1,3,4" -peers-addresses "localhost:6437,localhost:6439,localhost:6440" -peers-kv-addresses "http://localhost:5437,http://localhost:5439,http://localhost:5440" -port 6438 -kv-port 5438 -id 2 -db-location "./dist/raft-2.db" -log-location "./dist/raft-2.log"
+./dist/raft -peers-ids "1,3,4" -peers-addresses "localhost:6431,localhost:6433,localhost:6434" -peers-kv-addresses "http://localhost:5431,http://localhost:5433,http://localhost:5434" -port 6432 -kv-port 5432 -id 2 -db-location "./dist/raft-2.db" -log-location "./dist/raft-2.log"
 PIDS+=($!)
-./dist/raft -peers-ids "1,2,4" -peers-addresses "localhost:6437,localhost:6438,localhost:6440" -peers-kv-addresses "http://localhost:5437,http://localhost:5438,http://localhost:5440" -port 6439 -kv-port 5439 -id 3 -db-location "./dist/raft-3.db" -log-location "./dist/raft-3.log"
+./dist/raft -peers-ids "1,2,4" -peers-addresses "localhost:6431,localhost:6432,localhost:6434" -peers-kv-addresses "http://localhost:5431,http://localhost:5432,http://localhost:5434" -port 6433 -kv-port 5433 -id 3 -db-location "./dist/raft-3.db" -log-location "./dist/raft-3.log"
 PIDS+=($!)
-./dist/raft -peers-ids "1,2,3" -peers-addresses "localhost:6437,localhost:6438,localhost:6439" -peers-kv-addresses "http://localhost:5437,http://localhost:5438,http://localhost:5439" -port 6440 -kv-port 5440 -id 4 -db-location "./dist/raft-4.db" -log-location "./dist/raft-4.log"
+./dist/raft -peers-ids "1,2,3" -peers-addresses "localhost:6431,localhost:6432,localhost:6433" -peers-kv-addresses "http://localhost:5431,http://localhost:5432,http://localhost:5433" -port 6434 -kv-port 5434 -id 4 -db-location "./dist/raft-4.db" -log-location "./dist/raft-4.log"
 ```sh
 make build && ./scripts/test.sh
 ```
