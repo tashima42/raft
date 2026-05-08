@@ -90,8 +90,8 @@ func run(version string) error {
 
 	kv := keyval.NewKeyVal(ctx, serverConfig.ServerID, logger, r.C(), sendRaftLogsChan)
 
-	go r.Run()
 	go kv.Run()
+	go r.Run()
 
 	ctx, _ = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 

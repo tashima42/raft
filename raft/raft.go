@@ -147,11 +147,6 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 		}
 	}
 
-	raft.logger.InfoContext(ctx, "initiating log on start")
-	if err := raft.initLog(); err != nil {
-		return nil, fmt.Errorf("failed to init and apply log: %w", err)
-	}
-
 	return raft, nil
 }
 
@@ -186,9 +181,11 @@ func (r *Raft) initLog() error {
 			return fmt.Errorf("failed to set current term: %w", err)
 		}
 
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("applying log index: %d, term: %d", log.Index, log.Term))
 		if err := r.sendLogToClient(log.Entry); err != nil {
 			return fmt.Errorf("failed to send log to client: %w", err)
 		}
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting last applied to: %d", log.Index))
 		r.lastApplied = log.Index
 	}
 	return nil
@@ -197,6 +194,7 @@ func (r *Raft) initLog() error {
 func (r *Raft) sendLogToClient(entry []byte) error {
 	errChan := make(chan error, 1)
 
+	r.logger.InfoContext(r.ctx, "sending log to client")
 	select {
 	case r.sendLogsChan <- LogEntry{Entry: entry, ErrChan: errChan}:
 		r.logger.InfoContext(r.ctx, "log sent to client, waiting for response")
@@ -282,6 +280,13 @@ func (r *Raft) addToLog(entry []byte) error {
 // It calles the candidate state function and leader state function
 // based on the current state.
 func (r *Raft) Run() {
+	r.logger.InfoContext(r.ctx, "initiating log on run start")
+	if err := r.initLog(); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to init and apply log: "+err.Error())
+		r.cancel()
+		return
+	}
+
 	for {
 		select {
 		case <-r.ctx.Done():
