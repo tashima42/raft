@@ -25,11 +25,11 @@ import (
 
 type ServerConfig struct {
 	Port                          int
-	APIPort                       int
+	KVPort                        int
 	ServerID                      int
 	PeersIDs                      []int
 	PeersAddresses                []string
-	PeersAPIAddresses             []string
+	PeersKVAddresses              []string
 	DBLocation                    string
 	InitializationCooldownSeconds int
 	LogLocation                   string
@@ -88,28 +88,42 @@ func run(version string) error {
 		return fmt.Errorf("failed to start raft: %w", err)
 	}
 
-	kv := keyval.NewKeyVal(r.C(), sendRaftLogsChan)
-
-	kv.Get("key")
+	kv := keyval.NewKeyVal(ctx, serverConfig.ServerID, logger, r.C(), sendRaftLogsChan)
 
 	go r.Run()
+	go kv.Run()
 
 	ctx, _ = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", serverConfig.Port))
+	raftLis, err := net.Listen("tcp", fmt.Sprintf(":%d", serverConfig.Port))
 	if err != nil {
 		return fmt.Errorf("failed to start tcp server on port: %w", err)
 	}
-	s := grpc.NewServer()
-	grpcServer := &transport.RaftGRPCServer{Raft: r}
-	proto.RegisterRaftServer(s, grpcServer)
+	raftServer := grpc.NewServer()
+	raftGRPCServer := &transport.RaftGRPCServer{Raft: r}
+	proto.RegisterRaftServer(raftServer, raftGRPCServer)
+
+	kvLis, err := net.Listen("tcp", fmt.Sprintf(":%d", serverConfig.KVPort))
+	if err != nil {
+		return fmt.Errorf("failed to start tcp server on port: %w", err)
+	}
+	kvServer := grpc.NewServer()
+	kvGRPCServer := &transport.KeyValGRPCServer{KeyVal: kv}
+	proto.RegisterKeyValServer(kvServer, kvGRPCServer)
 
 	errChan := make(chan error, 1)
 
 	go func() {
-		slog.InfoContext(ctx, "grpc server started", slog.Uint64("port", uint64(serverConfig.Port)), slog.String("version", version))
-		if err := s.Serve(lis); err != nil {
-			errChan <- fmt.Errorf("grpc server: %w", err)
+		logger.InfoContext(ctx, "raft grpc server started", slog.Uint64("port", uint64(serverConfig.Port)), slog.String("version", version))
+		if err := raftServer.Serve(raftLis); err != nil {
+			errChan <- fmt.Errorf("raft grpc server: %w", err)
+		}
+	}()
+
+	go func() {
+		logger.InfoContext(ctx, "kv grpc server started", slog.Uint64("port", uint64(serverConfig.KVPort)), slog.String("version", version))
+		if err := kvServer.Serve(kvLis); err != nil {
+			errChan <- fmt.Errorf("kv grpc server: %w", err)
 		}
 	}()
 
@@ -117,7 +131,7 @@ func run(version string) error {
 	case err := <-errChan:
 		return err
 	case <-ctx.Done():
-		slog.InfoContext(ctx, "shutting down server")
+		logger.InfoContext(ctx, "shutting down server")
 
 		if err := r.GracefullyShutDown(); err != nil {
 			return fmt.Errorf("failed to gracefully shutdown raft: %w", err)
@@ -130,12 +144,12 @@ func run(version string) error {
 // parseFlags returns peersIDs, peersAddresses, port, id, dbLocation, error
 func parseFlags() (ServerConfig, error) {
 	port := flag.Int("port", 6437, "port to run grpc server on")
-	apiPort := flag.Int("api-port", 5437, "port to run http server on")
+	kvPort := flag.Int("kv-port", 5437, "port to run http server on")
 	sid := flag.Int("id", 1, "raft server id")
 	logFile := flag.String("log-location", "stdout", "raft-{id}.log")
 	peersIDsStr := flag.String("peers-ids", "", "comma separated ids. E.g: 1,2,3")
 	peersAddressesStr := flag.String("peers-addresses", "", "comma separated addresses. e.g: localhost:6438,localhost:6439")
-	peersAPIAddressesStr := flag.String("peers-api-addresses", "", "comma separated addresses. e.g: http://localhost:5438,http://localhost:5439")
+	peersKVAddressesStr := flag.String("peers-kv-addresses", "", "comma separated addresses. e.g: http://localhost:5438,http://localhost:5439")
 	dbLocation := flag.String("db-location", "raft.db", "db location. e.g: raft-1.db")
 	initializationCooldownSeconds := flag.Int("initilization-cooldown", 5, "delay before starting the clusters")
 	flag.Parse()
@@ -143,8 +157,8 @@ func parseFlags() (ServerConfig, error) {
 	if port == nil {
 		return ServerConfig{}, errors.New("empty port")
 	}
-	if apiPort == nil {
-		return ServerConfig{}, errors.New("empty api port")
+	if kvPort == nil {
+		return ServerConfig{}, errors.New("empty kv port")
 	}
 	if sid == nil {
 		return ServerConfig{}, errors.New("empty id")
@@ -158,8 +172,8 @@ func parseFlags() (ServerConfig, error) {
 	if peersAddressesStr == nil {
 		return ServerConfig{}, errors.New("empty peers addresses")
 	}
-	if peersAPIAddressesStr == nil {
-		return ServerConfig{}, errors.New("empty peers api addresses")
+	if peersKVAddressesStr == nil {
+		return ServerConfig{}, errors.New("empty peers kv addresses")
 	}
 
 	if initializationCooldownSeconds == nil {
@@ -168,10 +182,10 @@ func parseFlags() (ServerConfig, error) {
 
 	pis := strings.Split(*peersIDsStr, ",")
 	ads := strings.Split(*peersAddressesStr, ",")
-	apids := strings.Split(*peersAPIAddressesStr, ",")
+	kvAddresses := strings.Split(*peersKVAddressesStr, ",")
 
-	if len(pis) != len(ads) || len(ads) != len(apids) {
-		return ServerConfig{}, errors.New("peers ids and peers addresses or peers api addresses have different lengths")
+	if len(pis) != len(ads) || len(ads) != len(kvAddresses) {
+		return ServerConfig{}, errors.New("peers ids and peers addresses or peers kv addresses have different lengths")
 	}
 
 	ids := make([]int, len(pis))
@@ -188,10 +202,10 @@ func parseFlags() (ServerConfig, error) {
 		ServerID:                      *sid,
 		PeersIDs:                      ids,
 		PeersAddresses:                ads,
-		PeersAPIAddresses:             apids,
+		PeersKVAddresses:              kvAddresses,
 		LogLocation:                   *logFile,
 		Port:                          *port,
-		APIPort:                       *apiPort,
+		KVPort:                        *kvPort,
 		DBLocation:                    *dbLocation,
 		InitializationCooldownSeconds: *initializationCooldownSeconds,
 	}, nil
