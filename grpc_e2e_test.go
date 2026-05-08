@@ -99,7 +99,7 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 			t.Fatalf("failed to create raft node %d: %v", n.id, err)
 		}
 
-		kv := keyval.NewKeyVal(r.C(), sendRaftLogsChan)
+		kv := keyval.NewKeyVal(ctx, n.id, logger, r.C(), sendRaftLogsChan)
 
 		n.raft = r
 		n.kv = kv
@@ -167,40 +167,40 @@ func (c *e2eCluster) nodeByID(id int) *e2eNode {
 	return nil
 }
 
-// func waitFor(t *testing.T, timeout time.Duration, what string, fn func() bool) {
-// 	t.Helper()
-// 	deadline := time.Now().Add(timeout)
-// 	for time.Now().Before(deadline) {
-// 		if fn() {
-// 			return
-// 		}
-// 		time.Sleep(20 * time.Millisecond)
-// 	}
-// 	t.Fatalf("timed out waiting for %s", what)
-// }
-//
-// func waitForKeyOnAll(t *testing.T, c *e2eCluster, key, want string, timeout time.Duration) {
-// 	t.Helper()
-// 	waitFor(t, timeout, fmt.Sprintf("key %q replication", key), func() bool {
-// 		for _, n := range c.nodes {
-// 			if n.kv.Get(key) != want {
-// 				return false
-// 			}
-// 		}
-// 		return true
-// 	})
-// }
+func waitFor(t *testing.T, timeout time.Duration, what string, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func waitForKeyOnAll(t *testing.T, c *e2eCluster, key, want string, timeout time.Duration) {
+	t.Helper()
+	waitFor(t, timeout, fmt.Sprintf("key %q replication", key), func() bool {
+		for _, n := range c.nodes {
+			if n.kv.Get(key) != want {
+				return false
+			}
+		}
+		return true
+	})
+}
 
 func startClusterNormally(c *e2eCluster) {
 	for _, n := range c.nodes {
-		n.kv.Run()
+		go n.kv.Run()
 		go n.raft.Run()
 	}
 }
 
 func startClusterWithIncreasingStartupDelays(c *e2eCluster, baseDelay time.Duration) {
 	for i, n := range c.nodes {
-		n.kv.Run()
+		go n.kv.Run()
 		go n.raft.Run()
 
 		// Apply a fixed delay between each node startup to exercise
@@ -308,17 +308,17 @@ func Test4NodesLeaderDisconnectWithIncreasingStartupDelays(t *testing.T) {
 	}
 }
 
-// func TestGRPCE2E4NodesNaturalElectionAndReplication(t *testing.T) {
-// 	cluster := newE2ECluster(t, t.Name(), 4)
-// 	startClusterNormally(cluster)
-//
-// 	leader := waitForStableSingleLeader(t, cluster, 12*time.Second, 600*time.Millisecond)
-//
-// 	k := fmt.Sprintf("natural-k-%d", time.Now().UnixNano())
-// 	v := "natural-v"
-// 	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: k, Value: v}); err != nil {
-// 		t.Fatalf("append through elected leader failed: %v", err)
-// 	}
-//
-// 	waitForKeyOnAll(t, cluster, k, v, 8*time.Second)
-// }
+func TestGRPCE2E4NodesNaturalElectionAndReplication(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 4)
+	startClusterNormally(cluster)
+
+	leader := waitForStableSingleLeader(t, cluster, 12*time.Second, 600*time.Millisecond)
+
+	k := fmt.Sprintf("natural-k-%d", time.Now().UnixNano())
+	v := "natural-v"
+	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: k, Value: v}); err != nil {
+		t.Fatalf("append through elected leader failed: %v", err)
+	}
+
+	waitForKeyOnAll(t, cluster, k, v, 8*time.Second)
+}
