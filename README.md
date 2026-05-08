@@ -6,14 +6,14 @@ This is an implementation of the Raft protocol described on [raft.github.io](raf
 
 - [x] Elections
 - [x] Persistent storage
-- [x] Key-value store with HTTP API
+- [x] Key-value store with GRPC API
 - [x] Heartbeats
 - [x] Replicated log
+- [ ] Key-value store client in C++
 - [ ] Peer registration and removal
 - [ ] Log compaction
 - [ ] Request replay protection
 - [ ] Fast Raft
-- [ ] Remove HTTP raft client and server
 
 ## Testing
 
@@ -21,31 +21,21 @@ Integration and e2e tests:
 
 ```sh
 make test
+make e2e
 ```
 
 Manual testing:
 
 ```sh
-./dist/raft -peers-ids "2,3,4" -peers-addresses "localhost:6438,localhost:6439,localhost:6440" -peers-api-addresses "http://localhost:5438,http://localhost:5439,http://localhost:5440" -port 6437 -api-port 5437 -id 1 -db-location "./dist/raft-1.db" -log-location "./dist/raft-1.log"
+./dist/raft -peers-ids "2,3,4" -peers-addresses "localhost:6438,localhost:6439,localhost:6440" -peers-kv-addresses "http://localhost:5438,http://localhost:5439,http://localhost:5440" -port 6437 -kv-port 5437 -id 1 -db-location "./dist/raft-1.db" -log-location "./dist/raft-1.log"
 PIDS+=($!)
-./dist/raft -peers-ids "1,3,4" -peers-addresses "localhost:6437,localhost:6439,localhost:6440" -peers-api-addresses "http://localhost:5437,http://localhost:5439,http://localhost:5440" -port 6438 -api-port 5438 -id 2 -db-location "./dist/raft-2.db" -log-location "./dist/raft-2.log"
+./dist/raft -peers-ids "1,3,4" -peers-addresses "localhost:6437,localhost:6439,localhost:6440" -peers-kv-addresses "http://localhost:5437,http://localhost:5439,http://localhost:5440" -port 6438 -kv-port 5438 -id 2 -db-location "./dist/raft-2.db" -log-location "./dist/raft-2.log"
 PIDS+=($!)
-./dist/raft -peers-ids "1,2,4" -peers-addresses "localhost:6437,localhost:6438,localhost:6440" -peers-api-addresses "http://localhost:5437,http://localhost:5438,http://localhost:5440" -port 6439 -api-port 5439 -id 3 -db-location "./dist/raft-3.db" -log-location "./dist/raft-3.log"
+./dist/raft -peers-ids "1,2,4" -peers-addresses "localhost:6437,localhost:6438,localhost:6440" -peers-kv-addresses "http://localhost:5437,http://localhost:5438,http://localhost:5440" -port 6439 -kv-port 5439 -id 3 -db-location "./dist/raft-3.db" -log-location "./dist/raft-3.log"
 PIDS+=($!)
-./dist/raft -peers-ids "1,2,3" -peers-addresses "localhost:6437,localhost:6438,localhost:6439" -peers-api-addresses "http://localhost:5437,http://localhost:5438,http://localhost:5439" -port 6440 -api-port 5440 -id 4 -db-location "./dist/raft-4.db" -log-location "./dist/raft-4.log"
+./dist/raft -peers-ids "1,2,3" -peers-addresses "localhost:6437,localhost:6438,localhost:6439" -peers-kv-addresses "http://localhost:5437,http://localhost:5438,http://localhost:5439" -port 6440 -kv-port 5440 -id 4 -db-location "./dist/raft-4.db" -log-location "./dist/raft-4.log"
 ```sh
-
-```
-
 make build && ./scripts/test.sh
-
-```sh
-
-```
-
-curl -vL -X PUT <http://localhost:5439/api/key> -H 'content-type: application/json' -d '{"key": "country", "value": "Brasil"}'
-curl -vL <http://localhost:5439/api/key/country>
-
 ```
 
 ## Package: main
