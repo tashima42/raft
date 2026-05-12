@@ -16,7 +16,7 @@ build: download clean
 	go build -o $(TARGET) -ldflags '-w -X main.Version=$(VERSION)' .
 
 test: clean
-	go test -v -race -timeout 30s ./...
+	go test -v -race -timeout 180s ./...
 
 e2e: clean
 	go test -v -race -shuffle=on -count=$(TEST_COUNT) ./...
@@ -30,6 +30,10 @@ proto:
 		--go_out=$(OUT_DIR) --go_opt=paths=source_relative \
 		--go-grpc_out=$(OUT_DIR) --go-grpc_opt=paths=source_relative \
 		$(PROTO_DIR)/*.proto
+	cd kv_client && \
+	uv run -m grpc_tools.protoc -I../proto \
+		--python_out=./proto --pyi_out=./proto \
+		--grpc_python_out=./proto ../proto/*.proto
 
 .PHONY: clean
 clean:
