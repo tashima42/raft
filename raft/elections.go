@@ -74,7 +74,6 @@ func (r *Raft) requestVotes() error {
 		return err
 	}
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
-	// TODO: issue parallel vote requests and use channels for sync
 	wg := &sync.WaitGroup{}
 	electionCtx, electionCancel := context.WithCancel(r.ctx)
 	defer electionCancel()
@@ -85,20 +84,19 @@ func (r *Raft) requestVotes() error {
 			r.logger.InfoContext(electionCtx, "requesting vote from: "+peer.Address())
 			tCtx, tCancel := context.WithTimeout(electionCtx, time.Second*1)
 
-			lastLogIndex, err := r.prevLogIndex()
+			lastLogIndex, err := r.lastLogIndex()
 			if err != nil {
 				r.logger.ErrorContext(r.ctx, err.Error())
 				tCancel()
 				return
 			}
-			lastLogTerm, err := r.prevLogTerm()
+			lastLogTerm, err := r.lastLogTerm()
 			if err != nil {
 				r.logger.ErrorContext(r.ctx, err.Error())
 				tCancel()
 				return
 			}
 
-			// TODO: implement last log
 			peerTerm, voteGranted, err := r.Client.RequestVote(tCtx, *peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm})
 			if err != nil {
 				r.logger.ErrorContext(r.ctx, "failed to get response from request vote: "+err.Error())
@@ -108,7 +106,6 @@ func (r *Raft) requestVotes() error {
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
 			if peerTerm > currentTerm {
 				r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
-				// TODO: set leader
 				r.mu.Lock()
 				if err := r.setCurrentTerm(peerTerm); err != nil {
 					r.logger.ErrorContext(r.ctx, "failed to set current term: "+err.Error())

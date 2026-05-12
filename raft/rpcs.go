@@ -34,11 +34,11 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	}
 
 	// if req.PrevLogIndex
-	prevLogTerm, err := r.prevLogTerm()
+	lastLogTerm, err := r.lastLogTerm()
 	if err != nil {
 		return false, currentTerm, fmt.Errorf("failed to get previous log term: %w", err)
 	}
-	if prevLogTerm != req.PrevLogTerm {
+	if lastLogTerm != req.PrevLogTerm {
 		return false, currentTerm, nil
 	}
 
@@ -108,11 +108,11 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 	}
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("vote stored: %d", votedFor))
 
-	lastLogIndex, err := r.prevLogIndex()
+	lastLogIndex, err := r.lastLogIndex()
 	if err != nil {
 		return currentTerm, false, fmt.Errorf("failed to get last log index: %w", err)
 	}
-	lastLogTerm, err := r.prevLogTerm()
+	lastLogTerm, err := r.lastLogTerm()
 	if err != nil {
 		return currentTerm, false, fmt.Errorf("failed to get last log term: %w", err)
 	}

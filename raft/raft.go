@@ -114,28 +114,38 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 	}
 
 	raft.logger.InfoContext(ctx, "checking if there is a prevLogIndex")
-	if _, err := raft.prevLogIndex(); err != nil {
+	if _, err := raft.lastLogIndex(); err != nil {
 		// if there is no prev log index, set to 0 to indicate that there are no logs
 		// and prevent the no rows error from being returned when trying to get the prev log index later on
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("failed to get previous log index: %w", err)
 		}
-		if err := raft.setPrevLogIndex(0); err != nil {
+		if err := raft.setLastLogIndex(0); err != nil {
 			return nil, fmt.Errorf("failed to set previous log index: %w", err)
 		}
 	}
 
-	raft.logger.InfoContext(ctx, "checking if there is a prevLogTerm")
-	if _, err := raft.prevLogTerm(); err != nil {
+	raft.logger.InfoContext(ctx, "checking if there is a lastLogTerm")
+	if _, err := raft.lastLogTerm(); err != nil {
 		// if there is no prev log term, set to 0 to indicate that there are no logs
 		// and prevent the no rows error from being returned when trying to get the prev log term later on
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("failed to get previous log term: %w", err)
 		}
-		if err := raft.setPrevLogTerm(0); err != nil {
+		if err := raft.setLastLogTerm(0); err != nil {
 			return nil, fmt.Errorf("failed to set previous log term: %w", err)
 		}
 	}
+
+	// raft.logger.InfoContext(ctx, "checking if there is a leaderCommit")
+	// if _, err := raft.leaderCommit(); err != nil {
+	// 	if err != sql.ErrNoRows {
+	// 		return nil, fmt.Errorf("failed to get leader commit: %w", err)
+	// 	}
+	// 	if err := raft.setLeaderCommit(0); err != nil {
+	// 		return nil, fmt.Errorf("failed to set leader commit: %w", err)
+	// 	}
+	// }
 
 	raft.logger.InfoContext(ctx, "checking if there is a leaderID")
 	if _, err := raft.leaderID(); err != nil {
@@ -241,7 +251,7 @@ func (r *Raft) LeaderAPIAddress() (string, error) {
 // addToLog adds a new log entry to the log and sends append entries requests to peers
 // to replicate the log entry
 func (r *Raft) addToLog(entry []byte) error {
-	prevLogIndex, err := r.prevLogIndex()
+	prevLogIndex, err := r.lastLogIndex()
 	if err != nil {
 		return fmt.Errorf("failed to get previous log index: %w", err)
 	}
@@ -267,7 +277,7 @@ func (r *Raft) addToLog(entry []byte) error {
 		return fmt.Errorf("failed to send log to client: %w", err)
 	}
 
-	if err := r.setPrevLogIndex(prevLogIndex + 1); err != nil {
+	if err := r.setLastLogIndex(prevLogIndex + 1); err != nil {
 		return fmt.Errorf("failed to set previous log index: %w", err)
 	}
 	if err := r.setLeaderCommit(prevLogIndex + 1); err != nil {
@@ -275,6 +285,19 @@ func (r *Raft) addToLog(entry []byte) error {
 	}
 	return nil
 }
+
+// func (r *Raft) setNextIndexOnPeers() error {
+// 	lastLogIndex, err := r.lastLogIndex()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	for _, peer := range r.peers {
+// 		r.mu.Lock()
+// 		peer.SetNextIndex(lastLogIndex + 1)
+// 		r.mu.Unlock()
+// 	}
+// 	return nil
+// }
 
 // Run starts the main loop and goroutines for the server.
 // It calles the candidate state function and leader state function
@@ -286,6 +309,9 @@ func (r *Raft) Run() {
 		r.cancel()
 		return
 	}
+
+	r.logger.InfoContext(r.ctx, "setting next index on peers")
+	// r.setNextIndexOnPeers()
 
 	for {
 		select {
@@ -406,18 +432,18 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 	if err != nil {
 		return fmt.Errorf("send ape - failed to get current term: %w", err)
 	}
-	prevLogIndex, err := r.prevLogIndex()
+	prevLogIndex, err := r.lastLogIndex()
 	if err != nil {
 		return fmt.Errorf("failed to get previous log index: %w", err)
 	}
-	prevLogTerm, err := r.prevLogTerm()
+	lastLogTerm, err := r.lastLogTerm()
 	if err != nil {
 		return fmt.Errorf("failed to get previous log term: %w", err)
 	}
-	leaderCommit, err := r.prevLogTerm()
-	if err != nil {
-		return fmt.Errorf("failed to get leader commit: %w", err)
-	}
+	// leaderCommit, err := r.leaderCommit()
+	// if err != nil {
+	// 	return fmt.Errorf("failed to get leader commit: %w", err)
+	// }
 
 	quorum := 1 + ((len(r.peers) + 1) / 2)
 
@@ -431,16 +457,30 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 	wg := &sync.WaitGroup{}
 	for _, peer := range r.peers {
 		wg.Add(1)
-		go func(peer *Peer, psMu *sync.Mutex, peerSuccess map[int]bool) {
+		go func(peer *Peer, psMu *sync.Mutex, peerSuccess map[int]bool, entries []database.LogEntry) {
 			defer wg.Done()
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d: %s", peer.ID(), peer.Address()))
+
+			// peerNextIndex := peer.NextIndex()
+
+			// if len(entries) == 0 {
+			// 	if peerNextIndex != r.lastApplied {
+			// 		sendLog, err := r.db.GetLog(peerNextIndex)
+			// 		if err != nil {
+			// 			r.logger.ErrorContext(r.ctx, "failed to get peer next index: "+err.Error())
+			// 			return
+			// 		}
+			// 		entries = []database.LogEntry{{Term: currentTerm, Index: sendLog.Index, Entry: sendLog.Entry}}
+			// 	}
+			// }
+
 			appendEntriesReq := AppendEntriesRequest{
 				Term:         currentTerm,
 				LeaderID:     r.id,
 				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  prevLogTerm,
+				PrevLogTerm:  lastLogTerm,
 				Entries:      entries,
-				LeaderCommit: leaderCommit,
+				// LeaderCommit: leaderCommit,
 			}
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
 			tCtx, tCancel := context.WithTimeout(r.ctx, time.Second*1)
@@ -450,6 +490,7 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 				r.logger.ErrorContext(r.ctx, "failed to send append entries request to peer: "+err.Error())
 				success = false
 				term = -1
+				// return
 			}
 			if term > currentTerm {
 				r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d term is bigger than current term, turning into follower", peer.ID()))
@@ -468,17 +509,15 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 				r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
 				// TODO: implement retries
 
-				psMu.Lock()
-				peerSuccess[peer.ID()] = false
-				psMu.Unlock()
+				// decrement the next index to replicate missing logs
+				// peer.SetNextIndex(peer.NextIndex() - 1)
 
 				return
 			}
 			psMu.Lock()
 			peerSuccess[peer.ID()] = true
 			psMu.Unlock()
-
-		}(peer, psMu, peerSuccess)
+		}(peer, psMu, peerSuccess, entries)
 	}
 
 	wg.Wait()

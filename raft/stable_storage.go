@@ -9,8 +9,8 @@ import (
 const (
 	currentTermKey  = "internal-current-term"
 	votedForKey     = "internal-voted-for"
-	prevLogIndexKey = "internal-prev-log-index"
-	prevLogTermKey  = "internal-prev-log-term"
+	lastLogIndexKey = "internal-last-log-index"
+	lastLogTermKey  = "internal-last-log-term"
 	leaderCommitKey = "internal-leader-commit"
 	leaderIDKey     = "internal-leader-id"
 )
@@ -59,12 +59,12 @@ func (r *Raft) logCount() (int, error) {
 	return r.db.CountLogs()
 }
 
-func (r *Raft) setPrevLogIndex(idx int) error {
-	return r.db.SetRaftValue(prevLogIndexKey, strconv.Itoa(idx))
+func (r *Raft) setLastLogIndex(idx int) error {
+	return r.db.SetRaftValue(lastLogIndexKey, strconv.Itoa(idx))
 }
 
-func (r *Raft) prevLogIndex() (int, error) {
-	value, err := r.db.GetRaftValue(prevLogIndexKey)
+func (r *Raft) lastLogIndex() (int, error) {
+	value, err := r.db.GetRaftValue(lastLogIndexKey)
 	if err != nil {
 		return -1, err
 	}
@@ -84,26 +84,25 @@ func (r *Raft) leaderID() (int, error) {
 	return strconv.Atoi(leaderIDStr)
 }
 
-//
-// func (r *Raft) setLogIndex(idx int) error {
-// 	return r.db.SetRaftValue(logIndexKey, strconv.Itoa(idx))
+// func (r *Raft) setLastLogIndex(idx int) error {
+// 	return r.db.SetRaftValue(lastLogIndexKey, strconv.Itoa(idx))
 // }
-//
-// func (r *Raft) logIndex() (int, error) {
-// 	value, err := r.db.GetRaftValue(logIndexKey)
+
+// func (r *Raft) lastLogIndex() (int, error) {
+// 	value, err := r.db.GetRaftValue(lastLogIndexKey)
 // 	if err != nil {
 // 		return -1, err
 // 	}
-//
+
 // 	return strconv.Atoi(value)
 // }
 
-func (r *Raft) setPrevLogTerm(term int) error {
-	return r.db.SetRaftValue(prevLogTermKey, strconv.Itoa(term))
+func (r *Raft) setLastLogTerm(term int) error {
+	return r.db.SetRaftValue(lastLogTermKey, strconv.Itoa(term))
 }
 
-func (r *Raft) prevLogTerm() (int, error) {
-	value, err := r.db.GetRaftValue(prevLogTermKey)
+func (r *Raft) lastLogTerm() (int, error) {
+	value, err := r.db.GetRaftValue(lastLogTermKey)
 	if err != nil {
 		return -1, err
 	}
