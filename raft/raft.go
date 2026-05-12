@@ -229,6 +229,25 @@ func (r *Raft) IsLeader() bool {
 	return r.State == StateLeader
 }
 
+// LeaderKVAddress returns the KV gRPC address of the current leader,
+// or an error if the leader is not found or there is an issue getting the leader id
+func (r *Raft) LeaderKVAddress() (string, error) {
+	leaderID, err := r.leaderID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get leader id: %w", err)
+	}
+	var leader *Peer
+	for _, peer := range r.peers {
+		if peer.ID() == leaderID {
+			leader = peer
+		}
+	}
+	if leader == nil {
+		return "", errors.New("leader not found")
+	}
+	return leader.KVAddress(), nil
+}
+
 // LeaderAPIAddress returns the API address of the current leader,
 // or an error if the leader is not found or there is an issue getting the leader id
 func (r *Raft) LeaderAPIAddress() (string, error) {

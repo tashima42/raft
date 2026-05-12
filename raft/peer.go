@@ -6,16 +6,18 @@ type Peer struct {
 	id         int
 	address    string
 	apiAddress string
+	kvAddress  string
 	votedFor   int
 	nextIndex  int
 	mu         *sync.Mutex
 }
 
-func NewPeer(id int, address, apiAddress string) *Peer {
+func NewPeer(id int, address, apiAddress, kvAddress string) *Peer {
 	return &Peer{
 		id:         id,
 		address:    address,
 		apiAddress: apiAddress,
+		kvAddress:  kvAddress,
 		votedFor:   -1,
 		nextIndex:  -1,
 		mu:         &sync.Mutex{},
@@ -32,6 +34,10 @@ func (p *Peer) Address() string {
 
 func (p *Peer) APIAddress() string {
 	return p.apiAddress
+}
+
+func (p *Peer) KVAddress() string {
+	return p.kvAddress
 }
 
 func (p *Peer) NextIndex() int {

@@ -67,7 +67,7 @@ func run(version string) error {
 	peers := make([]*raft.Peer, len(serverConfig.PeersIDs))
 
 	for i, id := range serverConfig.PeersIDs {
-		peers[i] = raft.NewPeer(id, serverConfig.PeersAddresses[i], serverConfig.PeersAddresses[i])
+		peers[i] = raft.NewPeer(id, serverConfig.PeersAddresses[i], serverConfig.PeersAddresses[i], serverConfig.PeersKVAddresses[i])
 	}
 
 	db, err := database.NewSQLite(serverConfig.DBLocation)
@@ -107,7 +107,7 @@ func run(version string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start tcp server on port: %w", err)
 	}
-	kvServer := grpc.NewServer()
+	kvServer := grpc.NewServer(grpc.UnaryInterceptor(transport.LeaderRedirectInterceptor(r)))
 	kvGRPCServer := &transport.KeyValGRPCServer{KeyVal: kv}
 	proto.RegisterKeyValServer(kvServer, kvGRPCServer)
 
