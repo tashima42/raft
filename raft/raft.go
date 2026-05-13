@@ -3,11 +3,11 @@ package raft
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -16,7 +16,12 @@ import (
 
 var ErrQuorumNotReached = errors.New("quorum not reached")
 
-type RaftState int
+var (
+	minimumElectionTimeoutMS int64 = 300
+	maximumElectionTimeoutMS int64 = 5 * minimumElectionTimeoutMS
+)
+
+type StateType int
 
 const (
 	StateLeader = iota
@@ -24,7 +29,7 @@ const (
 	StateCandidate
 )
 
-func (s RaftState) String() string {
+func (s StateType) String() string {
 	switch s {
 	case StateLeader:
 		return "leader"
@@ -34,6 +39,33 @@ func (s RaftState) String() string {
 		return "candidate"
 	}
 	return ""
+}
+
+type stateCommand int
+
+const (
+	cmdSetState stateCommand = iota
+	cmdSetTerm
+	cmdSetVotedFor
+	cmdSetLastLogIndex
+	cmdSetLeaderID
+	cmdSetLastLogTerm
+	cmdSetLeaderCommit
+)
+
+type raftMsg struct {
+	cmds []raftMsgCmd
+}
+
+type raftMsgCmd struct {
+	kind         stateCommand
+	stateType    StateType
+	votedFor     int
+	lastLogIndex int
+	leaderID     int
+	lastLogTerm  int
+	term         int
+	leaderCommit int
 }
 
 type Raft struct {
@@ -50,10 +82,18 @@ type Raft struct {
 	heartbeatResetTime     time.Time
 	sendLogsChan           chan LogEntry
 	receiveLogsChan        chan LogEntry
+	statec                 chan raftMsg
 	lastApplied            int
-	State                  RaftState
+	State                  StateType
 	ctx                    context.Context
 	cancel                 context.CancelFunc
+
+	term         int
+	votedFor     int
+	lastLogIndex int
+	leaderID     int
+	lastLogTerm  int
+	leaderCommit int
 }
 
 type LogEntry struct {
@@ -62,6 +102,34 @@ type LogEntry struct {
 }
 
 var heartbeatTimeout time.Duration = time.Millisecond * 100
+
+func (r *Raft) stateManager() {
+	for {
+		select {
+		case msg := <-r.statec:
+			for _, cmd := range msg.cmds {
+				switch cmd.kind {
+				case cmdSetState:
+					r.State = cmd.stateType
+				case cmdSetTerm:
+					r.term = cmd.term
+				case cmdSetVotedFor:
+					r.votedFor = cmd.votedFor
+				case cmdSetLastLogIndex:
+					r.lastLogIndex = cmd.lastLogIndex
+				case cmdSetLeaderID:
+					r.leaderID = cmd.leaderID
+				case cmdSetLastLogTerm:
+					r.lastLogTerm = cmd.lastLogTerm
+				case cmdSetLeaderCommit:
+					r.leaderCommit = cmd.leaderCommit
+				}
+			}
+		case <-r.ctx.Done():
+			return
+		}
+	}
+}
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
 func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
@@ -75,6 +143,7 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 		db:                     db,
 		logger:                 logger,
 		Client:                 client,
+		statec:                 make(chan raftMsg),
 		mu:                     &sync.Mutex{},
 		initializationCooldown: time.Duration(initializationCooldownSecs) * time.Second,
 		heartbeatTimeout:       heartbeatTimeout,
@@ -84,78 +153,19 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 		sendLogsChan:           make(chan LogEntry),
 		receiveLogsChan:        receiveLogsChan,
 		State:                  StateFollower,
+
+		term:         0,
+		votedFor:     -1,
+		lastLogIndex: -1,
+		leaderID:     -1,
+		lastLogTerm:  -1,
+		leaderCommit: -1,
 	}
 
 	raft.resetElectionTimeout()
-	raft.mu.Lock()
 	raft.electionTimeout = raft.electionTimeout + raft.initializationCooldown
-	raft.mu.Unlock()
-
-	raft.logger.InfoContext(ctx, "checking if there is a current term")
-	if _, err := raft.currentTerm(); err != nil {
-		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("new - failed to get current term: %w", err)
-		}
-		raft.logger.InfoContext(ctx, "setting current term to 0")
-		if err := raft.setCurrentTerm(0); err != nil {
-			return nil, err
-		}
-	}
 
 	raft.logger.InfoContext(ctx, "checking if there is voted for")
-	if _, err := raft.votedFor(); err != nil {
-		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("failed to get voted for: %w", err)
-		}
-		raft.logger.InfoContext(ctx, "setting voted for to invalid value -1")
-		if err := raft.setVotedFor(-1); err != nil {
-			return nil, err
-		}
-	}
-
-	raft.logger.InfoContext(ctx, "checking if there is a prevLogIndex")
-	if _, err := raft.lastLogIndex(); err != nil {
-		// if there is no prev log index, set to 0 to indicate that there are no logs
-		// and prevent the no rows error from being returned when trying to get the prev log index later on
-		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("failed to get previous log index: %w", err)
-		}
-		if err := raft.setLastLogIndex(0); err != nil {
-			return nil, fmt.Errorf("failed to set previous log index: %w", err)
-		}
-	}
-
-	raft.logger.InfoContext(ctx, "checking if there is a lastLogTerm")
-	if _, err := raft.lastLogTerm(); err != nil {
-		// if there is no prev log term, set to 0 to indicate that there are no logs
-		// and prevent the no rows error from being returned when trying to get the prev log term later on
-		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("failed to get previous log term: %w", err)
-		}
-		if err := raft.setLastLogTerm(0); err != nil {
-			return nil, fmt.Errorf("failed to set previous log term: %w", err)
-		}
-	}
-
-	// raft.logger.InfoContext(ctx, "checking if there is a leaderCommit")
-	// if _, err := raft.leaderCommit(); err != nil {
-	// 	if err != sql.ErrNoRows {
-	// 		return nil, fmt.Errorf("failed to get leader commit: %w", err)
-	// 	}
-	// 	if err := raft.setLeaderCommit(0); err != nil {
-	// 		return nil, fmt.Errorf("failed to set leader commit: %w", err)
-	// 	}
-	// }
-
-	raft.logger.InfoContext(ctx, "checking if there is a leaderID")
-	if _, err := raft.leaderID(); err != nil {
-		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("failed to get leader id: %w", err)
-		}
-		if err := raft.setLeaderID(-1); err != nil {
-			return nil, fmt.Errorf("failed to set leader id: %w", err)
-		}
-	}
 
 	return raft, nil
 }
@@ -186,10 +196,7 @@ func (r *Raft) initLog() error {
 	}
 	r.logger.InfoContext(r.ctx, "ranging through logs")
 	for _, log := range logs {
-		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting term to: %d", log.Term))
-		if err := r.setCurrentTerm(log.Term); err != nil {
-			return fmt.Errorf("failed to set current term: %w", err)
-		}
+		r.term = log.Term
 
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("applying log index: %d, term: %d", log.Index, log.Term))
 		if err := r.sendLogToClient(log.Entry); err != nil {
@@ -296,12 +303,10 @@ func (r *Raft) addToLog(entry []byte) error {
 		return fmt.Errorf("failed to send log to client: %w", err)
 	}
 
-	if err := r.setLastLogIndex(prevLogIndex + 1); err != nil {
-		return fmt.Errorf("failed to set previous log index: %w", err)
-	}
-	if err := r.setLeaderCommit(prevLogIndex + 1); err != nil {
-		return fmt.Errorf("failed to set leader commit: %w", err)
-	}
+	r.statec <- raftMsg{cmds: []raftMsgCmd{
+		{kind: cmdSetLastLogIndex, term: prevLogIndex + 1},
+		{kind: cmdSetLeaderCommit, votedFor: prevLogIndex + 1},
+	}}
 	return nil
 }
 
@@ -331,6 +336,8 @@ func (r *Raft) Run() {
 
 	r.logger.InfoContext(r.ctx, "setting next index on peers")
 	// r.setNextIndexOnPeers()
+
+	go r.stateManager()
 
 	for {
 		select {
@@ -556,4 +563,214 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 	}
 
 	return nil
+}
+
+// resetElectionTimeout resets the election timeout to a random valuebetween
+// the minimum and maximum election timeout values
+func (r *Raft) resetElectionTimeout() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resetElectionTimeoutLocked()
+}
+
+func (r *Raft) resetElectionTimeoutLocked() {
+	r.logger.InfoContext(r.ctx, "resetting election timeout")
+	r.electionTimeout = r.randomElectionTimeout()
+	r.logger.InfoContext(r.ctx, fmt.Sprintf("new election timeout is: %s", r.electionTimeout.String()))
+	r.electionResetTime = time.Now()
+}
+
+func (r *Raft) randomElectionTimeout() time.Duration {
+	randTimeout := rand.Int64N(maximumElectionTimeoutMS - minimumElectionTimeoutMS)
+	return time.Millisecond * time.Duration(minimumElectionTimeoutMS+randTimeout)
+}
+
+// electionTimer creates a ticker that checks if the election timeout has been reached
+// and transitions the server to candidate state if it has.
+func (r *Raft) electionTimer() {
+	r.logger.InfoContext(r.ctx, "running election timer")
+
+	electionTicker := time.NewTicker(10 * time.Millisecond).C
+	for {
+		select {
+		case <-r.ctx.Done():
+			r.logger.InfoContext(r.ctx, "cancel command received, closing.")
+			return
+		case <-electionTicker:
+			r.mu.Lock()
+			if r.State == StateLeader {
+				// r.logger.InfoContext(r.ctx, "in leader state, ignoring election tick")
+				r.mu.Unlock()
+				continue
+			}
+			if time.Since(r.electionResetTime) >= r.electionTimeout {
+				r.logger.InfoContext(r.ctx, "setting state to candidate and unlocking mutex")
+
+				r.State = StateCandidate
+				r.mu.Unlock()
+				continue
+			}
+			r.mu.Unlock()
+		}
+	}
+}
+
+// requestVotes sends a RequestVote RPC to all peers and updates the server's state based
+// on the results. If the server has achieved a majority of votes, it becomes the lader.
+// If the server founds a peer with a higher term, it steps down to follower and updates
+// its term to the higher term.
+func (r *Raft) requestVotes() error {
+	r.logger.InfoContext(r.ctx, "requesting votes, locking mutex")
+	currentTerm, err := r.currentTerm()
+	if err != nil {
+		return err
+	}
+	r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
+	wg := &sync.WaitGroup{}
+	electionCtx, electionCancel := context.WithCancel(r.ctx)
+	defer electionCancel()
+	for _, peer := range r.peers {
+		wg.Add(1)
+		go func(peer *Peer) {
+			defer wg.Done()
+			r.logger.InfoContext(electionCtx, "requesting vote from: "+peer.Address())
+			tCtx, tCancel := context.WithTimeout(electionCtx, time.Second*1)
+
+			lastLogIndex, err := r.lastLogIndex()
+			if err != nil {
+				r.logger.ErrorContext(r.ctx, err.Error())
+				tCancel()
+				return
+			}
+			lastLogTerm, err := r.lastLogTerm()
+			if err != nil {
+				r.logger.ErrorContext(r.ctx, err.Error())
+				tCancel()
+				return
+			}
+
+			peerTerm, voteGranted, err := r.Client.RequestVote(tCtx, *peer, RequestVoteRequest{Term: currentTerm, CandidateID: r.id, LastLogIndex: lastLogIndex, LastLogTerm: lastLogTerm})
+			if err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to get response from request vote: "+err.Error())
+				peerTerm = -1
+				voteGranted = false
+			}
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peerID: %d, peerTerm: %d, voteGranted: %t", peer.ID(), peerTerm, voteGranted))
+			if peerTerm > currentTerm {
+				r.logger.InfoContext(r.ctx, "peer term is bigger than current term, turning into follower")
+				r.statec <- raftMsg{cmds: []raftMsgCmd{
+					{kind: cmdSetTerm, term: peerTerm},
+					{kind: cmdSetVotedFor, votedFor: -1},
+					{kind: cmdSetState, stateType: StateFollower},
+				}}
+				electionCancel()
+				tCancel()
+				return
+			}
+			if voteGranted {
+				r.logger.InfoContext(r.ctx, "vote granted, setting peer voted for")
+				peer.SetVotedFor(r.id)
+			}
+			tCancel()
+		}(peer)
+	}
+	wg.Wait()
+
+	wonElection, err := r.countVotes()
+	if err != nil {
+		return err
+	}
+	r.logger.InfoContext(r.ctx, fmt.Sprintf("voting results: %t", wonElection))
+	if wonElection {
+		r.logger.InfoContext(r.ctx, "won election, setting state to leader")
+		r.mu.Lock()
+		r.State = StateLeader
+		r.mu.Unlock()
+	}
+	return nil
+}
+
+// countVotes checks each peer for votes and if the candidate has a majority, returns true or an error
+func (r *Raft) countVotes() (bool, error) {
+	r.logger.InfoContext(r.ctx, "counting votes")
+	totalVotes := 1
+	votedFor, err := r.votedFor()
+	if err != nil {
+		return false, err
+	}
+	// convert to follower
+	if votedFor != r.id {
+		r.logger.InfoContext(r.ctx, "server did not vote for self, setting to -1 and converting to follower state")
+
+		r.statec <- raftMsg{cmds: []raftMsgCmd{
+			{kind: cmdSetVotedFor, votedFor: -1},
+			{kind: cmdSetState, stateType: StateFollower},
+		}}
+		return false, nil
+	}
+	for _, peer := range r.peers {
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d voted for: %d", peer.ID(), peer.VotedFor()))
+		if peer.VotedFor() == r.id {
+			totalVotes++
+		}
+		peer.SetVotedFor(-1)
+	}
+	majority := 1 + ((len(r.peers) + 1) / 2)
+
+	if totalVotes < majority {
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("majority of votes is smaller than current total votes: totalVotes %d < majority %d", totalVotes, majority))
+		return false, nil
+	}
+	r.logger.InfoContext(r.ctx, fmt.Sprintf("total votes: %d >= %d, returning true for elected", totalVotes, majority))
+	return true, nil
+}
+
+// candidateState handles the logic for when a server turns to a candidate,
+// the election timeout is reset and votes are requested from peers
+func (r *Raft) candidateState() error {
+	for {
+		select {
+		case <-r.ctx.Done():
+			return nil
+		default:
+			r.logger.InfoContext(r.ctx, "candidate state identified")
+
+			// Atomically increment term, self-vote, and reset timeout while holding
+			// the mutex so concurrent RequestVote RPCs cannot observe votedFor=-1
+			// in the gap between setCurrentTerm (which resets votedFor) and setVotedFor.
+			r.mu.Lock()
+			if r.State != StateCandidate {
+				// Another RPC already stepped us down; abort this round.
+				r.mu.Unlock()
+				return nil
+			}
+			currentTerm, err := r.currentTerm()
+			if err != nil {
+				r.mu.Unlock()
+				r.logger.ErrorContext(r.ctx, "candidate - failed to get current term: "+err.Error())
+				continue
+			}
+			currentTerm += 1
+			r.statec <- raftMsg{cmds: []raftMsgCmd{
+				{kind: cmdSetTerm, term: currentTerm},
+				{kind: cmdSetVotedFor, votedFor: r.id},
+			}}
+			r.resetElectionTimeoutLocked()
+			r.mu.Unlock()
+
+			r.logger.InfoContext(r.ctx, "requesting votes")
+			if err := r.requestVotes(); err != nil {
+				return err
+			}
+
+			r.mu.Lock()
+			if r.State == StateCandidate {
+				// Election round ended without a winner; force a new randomized
+				// timeout window before the next round to avoid tight split loops.
+				r.resetElectionTimeoutLocked()
+			}
+			r.mu.Unlock()
+			return nil
+		}
+	}
 }

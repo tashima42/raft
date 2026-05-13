@@ -23,14 +23,11 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 
 	// TODO: if there is a conflict with the existing log, delete the existing log and all that follow it
 	if currentTerm != req.Term {
-		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting current term to %d", req.Term))
-		if err := r.setCurrentTerm(req.Term); err != nil {
-			return false, currentTerm, fmt.Errorf("failed to set current term: %w", err)
-		}
-		if err := r.setVotedFor(-1); err != nil {
-			return false, currentTerm, fmt.Errorf("failed to set voted for: %w", err)
-		}
 		currentTerm = req.Term
+		r.statec <- raftMsg{cmds: []raftMsgCmd{
+			{kind: cmdSetTerm, term: currentTerm},
+			{kind: cmdSetVotedFor, votedFor: r.id},
+		}}
 	}
 
 	// if req.PrevLogIndex
@@ -67,9 +64,9 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 		}
 	}
 
-	if err := r.setLeaderID(req.LeaderID); err != nil {
-		return false, currentTerm, fmt.Errorf("failed to set leader id: %w", err)
-	}
+	r.statec <- raftMsg{cmds: []raftMsgCmd{
+		{kind: cmdSetLeaderID, term: req.LeaderID},
+	}}
 
 	r.resetElectionTimeout()
 	r.logger.InfoContext(r.ctx, "replying true")
@@ -93,13 +90,11 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 	}
 	if req.Term > currentTerm {
 		currentTerm = req.Term
-		if err := r.setCurrentTerm(currentTerm); err != nil {
-			return currentTerm, false, fmt.Errorf("failed to set current term: %w", err)
-		}
-		if err := r.setVotedFor(-1); err != nil {
-			return currentTerm, false, fmt.Errorf("failed to set voted for: %w", err)
-		}
-		r.State = StateFollower
+		r.statec <- raftMsg{cmds: []raftMsgCmd{
+			{kind: cmdSetTerm, term: currentTerm},
+			{kind: cmdSetVotedFor, votedFor: -1},
+			{kind: cmdSetState, stateType: StateFollower},
+		}}
 		r.resetElectionTimeoutLocked()
 	}
 	votedFor, err := r.votedFor()
@@ -128,8 +123,10 @@ func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
 		}
 
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("voting true for: %d", req.CandidateID))
-		err := r.setVotedFor(req.CandidateID)
-		r.State = StateFollower
+		r.statec <- raftMsg{cmds: []raftMsgCmd{
+			{kind: cmdSetVotedFor, votedFor: req.CandidateID},
+			{kind: cmdSetState, stateType: StateFollower},
+		}}
 		r.resetElectionTimeoutLocked()
 
 		return currentTerm, true, err
