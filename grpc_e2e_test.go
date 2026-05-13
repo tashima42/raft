@@ -22,7 +22,7 @@ import (
 type e2eNode struct {
 	id       int
 	address  string
-	apiAddr  string
+	kvAddr   string
 	dbPath   string
 	peers    []*raft.Peer
 	logger   *slog.Logger
@@ -70,7 +70,7 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 		nodes = append(nodes, &e2eNode{
 			id:       id,
 			address:  lis.Addr().String(),
-			apiAddr:  fmt.Sprintf("http://127.0.0.1:%d", 25000+id),
+			kvAddr:   fmt.Sprintf("http://127.0.0.1:%d", 25000+id),
 			listener: lis,
 		})
 	}
@@ -81,7 +81,7 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 			if p.id == n.id {
 				continue
 			}
-			peers = append(peers, raft.NewPeer(p.id, p.address, p.apiAddr))
+			peers = append(peers, raft.NewPeer(p.id, p.address, p.kvAddr))
 		}
 
 		dbPath := filepath.Join(t.TempDir(), fmt.Sprintf("raft-node-%d.db", n.id))

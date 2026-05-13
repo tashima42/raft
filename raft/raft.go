@@ -264,7 +264,7 @@ func (r *Raft) LeaderAPIAddress() (string, error) {
 	if leader == nil {
 		return "", errors.New("leader not found")
 	}
-	return leader.APIAddress(), nil
+	return leader.KVAddress(), nil
 }
 
 // addToLog adds a new log entry to the log and sends append entries requests to peers

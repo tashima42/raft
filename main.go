@@ -67,7 +67,7 @@ func run(version string) error {
 	peers := make([]*raft.Peer, len(serverConfig.PeersIDs))
 
 	for i, id := range serverConfig.PeersIDs {
-		peers[i] = raft.NewPeer(id, serverConfig.PeersAddresses[i], serverConfig.PeersAddresses[i], serverConfig.PeersKVAddresses[i])
+		peers[i] = raft.NewPeer(id, serverConfig.PeersAddresses[i], serverConfig.PeersKVAddresses[i])
 	}
 
 	db, err := database.NewSQLite(serverConfig.DBLocation)

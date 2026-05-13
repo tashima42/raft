@@ -3,24 +3,22 @@ package raft
 import "sync"
 
 type Peer struct {
-	id         int
-	address    string
-	apiAddress string
-	kvAddress  string
-	votedFor   int
-	nextIndex  int
-	mu         *sync.Mutex
+	id        int
+	address   string
+	kvAddress string
+	votedFor  int
+	nextIndex int
+	mu        *sync.Mutex
 }
 
-func NewPeer(id int, address, apiAddress, kvAddress string) *Peer {
+func NewPeer(id int, address, kvAddress string) *Peer {
 	return &Peer{
-		id:         id,
-		address:    address,
-		apiAddress: apiAddress,
-		kvAddress:  kvAddress,
-		votedFor:   -1,
-		nextIndex:  -1,
-		mu:         &sync.Mutex{},
+		id:        id,
+		address:   address,
+		kvAddress: kvAddress,
+		votedFor:  -1,
+		nextIndex: -1,
+		mu:        &sync.Mutex{},
 	}
 }
 
@@ -30,10 +28,6 @@ func (p *Peer) ID() int {
 
 func (p *Peer) Address() string {
 	return p.address
-}
-
-func (p *Peer) APIAddress() string {
-	return p.apiAddress
 }
 
 func (p *Peer) KVAddress() string {
