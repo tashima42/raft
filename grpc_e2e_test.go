@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -97,7 +98,7 @@ func newE2ECluster(t *testing.T, testName string, size int) *e2eCluster {
 		ctx, cancel := context.WithCancel(context.Background())
 
 		sendRaftLogsChan := make(chan raft.LogEntry)
-		r, err := raft.NewRaft(ctx, cancel, logger, db, client, n.id, peers, 0, sendRaftLogsChan)
+		r, err := raft.NewRaft(ctx, cancel, logger, db, *client, n.id, peers, 0, sendRaftLogsChan)
 		if err != nil {
 			t.Fatalf("failed to create raft node %d: %v", n.id, err)
 		}
@@ -195,7 +196,7 @@ func (c *e2eCluster) reconnectNode(t *testing.T, n *e2eNode) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sendRaftLogsChan := make(chan raft.LogEntry)
-	r, err := raft.NewRaft(ctx, cancel, n.logger, db, client, n.id, n.peers, 0, sendRaftLogsChan)
+	r, err := raft.NewRaft(ctx, cancel, n.logger, db, *client, n.id, n.peers, 0, sendRaftLogsChan)
 	if err != nil {
 		_ = lis.Close()
 		_ = db.Close()
@@ -260,6 +261,33 @@ func waitForKeyOnAll(t *testing.T, c *e2eCluster, key, want string, timeout time
 		}
 		return true
 	})
+}
+
+func nodeHasReplicatedPack(node *e2eNode, key, value string) bool {
+	db, err := database.NewSQLite(node.dbPath)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	logs, err := db.GetLogs()
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range logs {
+		var p keyval.Pack
+		if err := json.Unmarshal(entry.Entry, &p); err != nil {
+			continue
+		}
+		if p.Key == key && p.Value == value {
+			return true
+		}
+	}
+
+	return false
 }
 
 func startClusterNormally(c *e2eCluster) {
@@ -441,48 +469,105 @@ func Test4NodesNaturalElectionAndReplication(t *testing.T) {
 	waitForKeyOnAll(t, cluster, k, v, 8*time.Second)
 }
 
-// func Test4NodesFollowerDisconnectWriteReconnectCatchesUp(t *testing.T) {
-// 	cluster := newE2ECluster(t, t.Name(), 4)
-// 	startClusterNormally(cluster)
+func Test4NodesLeaderFailoverOverwriteAndReconnectLogCatchup(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 4)
+	startClusterNormally(cluster)
 
-// 	leader := waitForStableSingleLeader(t, cluster, 12*time.Second, 600*time.Millisecond)
-// 	if leader == nil {
-// 		t.Fatalf("expected a leader")
-// 	}
+	leader := waitForStableSingleLeader(t, cluster, 15*time.Second, 800*time.Millisecond)
+	if leader == nil {
+		t.Fatalf("expected initial leader")
+	}
 
-// 	disconnectedFollower := cluster.nodeByID((leader.id % 4) + 1)
-// 	if disconnectedFollower == nil {
-// 		t.Fatalf("expected a follower to disconnect")
-// 	}
+	key := fmt.Sprintf("failover-overwrite-k-%d", time.Now().UnixNano())
+	firstValue := "v1"
+	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: key, Value: firstValue}); err != nil {
+		t.Fatalf("failed to append initial key/value on leader %d: %v", leader.id, err)
+	}
+	waitForKeyOnAll(t, cluster, key, firstValue, 10*time.Second)
 
-// 	cluster.disconnectNode(disconnectedFollower)
+	oldLeaderID := leader.id
+	cluster.disconnectNode(leader)
 
-// 	k := fmt.Sprintf("follower-reconnect-k-%d", time.Now().UnixNano())
-// 	v := "follower-reconnect-v"
-// 	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: k, Value: v}); err != nil {
-// 		t.Fatalf("append through leader while follower is disconnected failed: %v", err)
-// 	}
+	newLeader := waitForStableSingleLeader(t, cluster, 15*time.Second, 800*time.Millisecond)
+	if newLeader == nil {
+		t.Fatalf("expected new leader after old leader disconnect")
+	}
+	if newLeader.id == oldLeaderID {
+		t.Fatalf("expected a different leader after disconnect, got same leader id=%d", newLeader.id)
+	}
 
-// 	// Ensure committed value is visible on currently online nodes before reconnecting follower.
-// 	waitFor(t, 8*time.Second, fmt.Sprintf("key %q replication on online nodes", k), func() bool {
-// 		for _, n := range cluster.nodes {
-// 			if n.offline || n.kv == nil {
-// 				continue
-// 			}
-// 			if n.kv.Get(k) != v {
-// 				return false
-// 			}
-// 		}
-// 		return true
-// 	})
+	secondValue := "v2"
+	if err := newLeader.kv.SendLogToRaft(keyval.Pack{Key: key, Value: secondValue}); err != nil {
+		t.Fatalf("failed to append overwritten key/value on new leader %d: %v", newLeader.id, err)
+	}
 
-// 	cluster.reconnectNode(t, disconnectedFollower)
+	waitFor(t, 10*time.Second, fmt.Sprintf("online nodes replicate overwritten key %q", key), func() bool {
+		for _, n := range cluster.nodes {
+			if n.offline || n.kv == nil {
+				continue
+			}
+			if n.kv.Get(key) != secondValue {
+				return false
+			}
+		}
+		return true
+	})
 
-// 	// Reconnected follower should eventually receive the entry that was committed while it was offline.
-// 	waitFor(t, 12*time.Second, fmt.Sprintf("reconnected follower %d to catch up key %q", disconnectedFollower.id, k), func() bool {
-// 		if disconnectedFollower.kv == nil {
-// 			return false
-// 		}
-// 		return disconnectedFollower.kv.Get(k) == v
-// 	})
-// }
+	reconnectedNode := cluster.nodeByID(oldLeaderID)
+	cluster.reconnectNode(t, reconnectedNode)
+
+	waitForKeyOnAll(t, cluster, key, secondValue, 15*time.Second)
+
+	waitFor(t, 15*time.Second, fmt.Sprintf("reconnected node %d has original log entry", reconnectedNode.id), func() bool {
+		return nodeHasReplicatedPack(reconnectedNode, key, firstValue)
+	})
+	waitFor(t, 15*time.Second, fmt.Sprintf("reconnected node %d has overwritten log entry", reconnectedNode.id), func() bool {
+		return nodeHasReplicatedPack(reconnectedNode, key, secondValue)
+	})
+}
+
+func Test4NodesFollowerDisconnectWriteReconnectCatchesUp(t *testing.T) {
+	cluster := newE2ECluster(t, t.Name(), 4)
+	startClusterNormally(cluster)
+
+	leader := waitForStableSingleLeader(t, cluster, 12*time.Second, 600*time.Millisecond)
+	if leader == nil {
+		t.Fatalf("expected a leader")
+	}
+
+	disconnectedFollower := cluster.nodeByID((leader.id % 4) + 1)
+	if disconnectedFollower == nil {
+		t.Fatalf("expected a follower to disconnect")
+	}
+
+	cluster.disconnectNode(disconnectedFollower)
+
+	k := fmt.Sprintf("follower-reconnect-k-%d", time.Now().UnixNano())
+	v := "follower-reconnect-v"
+	if err := leader.kv.SendLogToRaft(keyval.Pack{Key: k, Value: v}); err != nil {
+		t.Fatalf("append through leader while follower is disconnected failed: %v", err)
+	}
+
+	// Ensure committed value is visible on currently online nodes before reconnecting follower.
+	waitFor(t, 8*time.Second, fmt.Sprintf("key %q replication on online nodes", k), func() bool {
+		for _, n := range cluster.nodes {
+			if n.offline || n.kv == nil {
+				continue
+			}
+			if n.kv.Get(k) != v {
+				return false
+			}
+		}
+		return true
+	})
+
+	cluster.reconnectNode(t, disconnectedFollower)
+
+	// Reconnected follower should eventually receive the entry that was committed while it was offline.
+	waitFor(t, 12*time.Second, fmt.Sprintf("reconnected follower %d to catch up key %q", disconnectedFollower.id, k), func() bool {
+		if disconnectedFollower.kv == nil {
+			return false
+		}
+		return disconnectedFollower.kv.Get(k) == v
+	})
+}
