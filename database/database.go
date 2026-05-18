@@ -19,7 +19,6 @@ type Database interface {
 	DeleteLogsFromIndex(idx int) error
 	GetLogs() ([]LogEntry, error)
 	GetLog(idx int) (LogEntry, error)
-	CountLogs() (int, error)
 	Close() error
 }
 
@@ -183,11 +182,6 @@ func (d *SQLite) GetLog(idx int) (log LogEntry, err error) {
 	log.Term = term
 	log.Index = idx
 	return log, err
-}
-
-func (d *SQLite) CountLogs() (logCount int, err error) {
-	err = d.db.QueryRow("SELECT COUNT(*) FROM logs").Scan(&logCount)
-	return logCount, err
 }
 
 func (d *SQLite) Close() error {

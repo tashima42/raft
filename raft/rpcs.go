@@ -45,13 +45,13 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	r.logger.InfoContext(r.ctx, "appending entries to log")
 	// (§5.3)
 	r.logger.InfoContext(r.ctx, "getting count log")
-	logCount, err := r.logCount()
+	lastLogIndex, err := r.lastLogIndex()
 	if err != nil {
-		return false, currentTerm, fmt.Errorf("failed to count logs: %w", err)
+		return false, currentTerm, fmt.Errorf("failed to get last log index: %w", err)
 	}
-	r.logger.InfoContext(r.ctx, fmt.Sprintf("log count is: %d", logCount))
-	if req.PrevLogIndex > logCount {
-		r.logger.InfoContext(r.ctx, "previous log index from request is bigger than current log count, replying false")
+	r.logger.InfoContext(r.ctx, fmt.Sprintf("last log index is: %d", lastLogIndex))
+	if req.PrevLogIndex > lastLogIndex {
+		r.logger.InfoContext(r.ctx, "previous log index from request is bigger than current last log index, replying false")
 		return false, currentTerm, nil
 	}
 
@@ -69,6 +69,19 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 
 	if err := r.setLeaderID(req.LeaderID); err != nil {
 		return false, currentTerm, fmt.Errorf("failed to set leader id: %w", err)
+	}
+
+	if err := r.setLeaderCommit(req.LeaderCommit); err != nil {
+		return false, currentTerm, fmt.Errorf("failed to set leader commit: %w", err)
+	}
+	if len(req.Entries) > 0 {
+		lastEntry := req.Entries[len(req.Entries)-1]
+		if err := r.setLastLogIndex(lastEntry.Index); err != nil {
+			return false, currentTerm, fmt.Errorf("failed to set previous log index: %w", err)
+		}
+		if err := r.setLastLogTerm(lastEntry.Term); err != nil {
+			return false, currentTerm, fmt.Errorf("failed to set previous log term: %w", err)
+		}
 	}
 
 	r.resetElectionTimeout()

@@ -55,10 +55,6 @@ func (r *Raft) logs() ([]database.LogEntry, error) {
 	return r.db.GetLogs()
 }
 
-func (r *Raft) logCount() (int, error) {
-	return r.db.CountLogs()
-}
-
 func (r *Raft) setLastLogIndex(idx int) error {
 	return r.db.SetRaftValue(lastLogIndexKey, strconv.Itoa(idx))
 }
@@ -114,11 +110,11 @@ func (r *Raft) setLeaderCommit(commitIDX int) error {
 	return r.db.SetRaftValue(leaderCommitKey, strconv.Itoa(commitIDX))
 }
 
-// func (r *Raft) leaderCommit() (int, error) {
-// 	value, err := r.db.GetRaftValue(leaderCommitKey)
-// 	if err != nil {
-// 		return -1, err
-// 	}
-//
-// 	return strconv.Atoi(value)
-// }
+func (r *Raft) leaderCommit() (int, error) {
+	value, err := r.db.GetRaftValue(leaderCommitKey)
+	if err != nil {
+		return -1, err
+	}
+
+	return strconv.Atoi(value)
+}

@@ -137,15 +137,15 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 		}
 	}
 
-	// raft.logger.InfoContext(ctx, "checking if there is a leaderCommit")
-	// if _, err := raft.leaderCommit(); err != nil {
-	// 	if err != sql.ErrNoRows {
-	// 		return nil, fmt.Errorf("failed to get leader commit: %w", err)
-	// 	}
-	// 	if err := raft.setLeaderCommit(0); err != nil {
-	// 		return nil, fmt.Errorf("failed to set leader commit: %w", err)
-	// 	}
-	// }
+	raft.logger.InfoContext(ctx, "checking if there is a leaderCommit")
+	if _, err := raft.leaderCommit(); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, fmt.Errorf("failed to get leader commit: %w", err)
+		}
+		if err := raft.setLeaderCommit(0); err != nil {
+			return nil, fmt.Errorf("failed to set leader commit: %w", err)
+		}
+	}
 
 	raft.logger.InfoContext(ctx, "checking if there is a leaderID")
 	if _, err := raft.leaderID(); err != nil {
@@ -459,10 +459,10 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 	if err != nil {
 		return fmt.Errorf("failed to get previous log term: %w", err)
 	}
-	// leaderCommit, err := r.leaderCommit()
-	// if err != nil {
-	// 	return fmt.Errorf("failed to get leader commit: %w", err)
-	// }
+	leaderCommit, err := r.leaderCommit()
+	if err != nil {
+		return fmt.Errorf("failed to get leader commit: %w", err)
+	}
 
 	quorum := 1 + ((len(r.peers) + 1) / 2)
 
@@ -499,7 +499,7 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 				PrevLogIndex: prevLogIndex,
 				PrevLogTerm:  lastLogTerm,
 				Entries:      entries,
-				// LeaderCommit: leaderCommit,
+				LeaderCommit: leaderCommit,
 			}
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
 			tCtx, tCancel := context.WithTimeout(r.ctx, time.Second*1)
@@ -552,6 +552,18 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries success count: %d, quorum needed: %d", successCount, quorum))
 		if successCount < quorum {
 			return ErrQuorumNotReached
+		}
+		if len(entries) > 0 {
+			lastEntry := entries[len(entries)-1]
+			if err := r.setLastLogIndex(lastEntry.Index); err != nil {
+				return fmt.Errorf("failed to set previous log index: %w", err)
+			}
+			if err := r.setLastLogTerm(lastEntry.Term); err != nil {
+				return fmt.Errorf("failed to set previous log term: %w", err)
+			}
+			if err := r.setLeaderCommit(lastEntry.Index); err != nil {
+				return fmt.Errorf("failed to set leader commit: %w", err)
+			}
 		}
 	}
 
