@@ -3,6 +3,7 @@ package transport
 
 import (
 	"context"
+	"log"
 
 	"github.com/tashima42/raft/database"
 	"github.com/tashima42/raft/proto"
@@ -31,13 +32,15 @@ func (g *RaftGRPCServer) AppendEntries(ctx context.Context, req *proto.AppendEnt
 			Entry: entry.Entry,
 		}
 	}
-	success, term, err := g.Raft.AppendEntries(rar)
+	success, term, lastIndex, err := g.Raft.AppendEntries(rar)
 	if err != nil {
+		log.Printf("append entries handler failed: %v", err)
 		return nil, err
 	}
 	return &proto.AppendEntriesResponse{
-		Term:    int32(term),
-		Success: success,
+		Term:      int32(term),
+		Success:   success,
+		LastIndex: int32(lastIndex),
 	}, nil
 }
 
@@ -51,6 +54,7 @@ func (g *RaftGRPCServer) RequestVote(ctx context.Context, req *proto.RequestVote
 
 	term, voteGranted, err := g.Raft.RequestVote(rvr)
 	if err != nil {
+		log.Printf("request vote handler failed: %v", err)
 		return nil, err
 	}
 	return &proto.RequestVoteResponse{

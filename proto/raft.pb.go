@@ -110,6 +110,7 @@ type AppendEntriesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Term          int32                  `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
 	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	LastIndex     int32                  `protobuf:"varint,3,opt,name=lastIndex,proto3" json:"lastIndex,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -156,6 +157,13 @@ func (x *AppendEntriesResponse) GetSuccess() bool {
 		return x.Success
 	}
 	return false
+}
+
+func (x *AppendEntriesResponse) GetLastIndex() int32 {
+	if x != nil {
+		return x.LastIndex
+	}
+	return 0
 }
 
 type LogEntry struct {
@@ -350,10 +358,11 @@ const file_raft_proto_rawDesc = "" +
 	"\fprevLogIndex\x18\x03 \x01(\x05R\fprevLogIndex\x12 \n" +
 	"\vprevLogTerm\x18\x04 \x01(\x05R\vprevLogTerm\x12\"\n" +
 	"\fleaderCommit\x18\x05 \x01(\x05R\fleaderCommit\x12)\n" +
-	"\aentries\x18\x06 \x03(\v2\x0f.proto.LogEntryR\aentries\"E\n" +
+	"\aentries\x18\x06 \x03(\v2\x0f.proto.LogEntryR\aentries\"c\n" +
 	"\x15AppendEntriesResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12\x18\n" +
-	"\asuccess\x18\x02 \x01(\bR\asuccess\"J\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x1c\n" +
+	"\tlastIndex\x18\x03 \x01(\x05R\tlastIndex\"J\n" +
 	"\bLogEntry\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x05R\x04term\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x05R\x05index\x12\x14\n" +
