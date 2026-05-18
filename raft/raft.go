@@ -41,7 +41,7 @@ type Raft struct {
 	peers                  []*Peer
 	db                     database.Database
 	logger                 *slog.Logger
-	Client                 Client
+	Client                 GRPCClient
 	mu                     *sync.Mutex
 	initializationCooldown time.Duration
 	electionTimeout        time.Duration
@@ -50,7 +50,6 @@ type Raft struct {
 	heartbeatResetTime     time.Time
 	sendLogsChan           chan LogEntry
 	receiveLogsChan        chan LogEntry
-	lastApplied            int
 	State                  RaftState
 	ctx                    context.Context
 	cancel                 context.CancelFunc
@@ -64,7 +63,7 @@ type LogEntry struct {
 var heartbeatTimeout time.Duration = time.Millisecond * 100
 
 // NewRaft creates a new Raft instance and initializes or load values from stable storage.
-func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, db database.Database, client Client, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
+func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger, db database.Database, client GRPCClient, id int, peers []*Peer, initializationCooldownSecs int, receiveLogsChan chan LogEntry) (*Raft, error) {
 	logger = logger.With("node_id", id)
 	logger.InfoContext(ctx, "creating a new raft instance")
 	raft := &Raft{
@@ -80,7 +79,6 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 		heartbeatTimeout:       heartbeatTimeout,
 		electionResetTime:      time.Now(),
 		heartbeatResetTime:     time.Now(),
-		lastApplied:            -1,
 		sendLogsChan:           make(chan LogEntry),
 		receiveLogsChan:        receiveLogsChan,
 		State:                  StateFollower,

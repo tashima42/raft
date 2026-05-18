@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/tashima42/raft/database"
 	"github.com/tashima42/raft/proto"
@@ -11,16 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-type Client interface {
-	// AppendEntries sends entries from the leader to a peer and returns if it was successful, the peer's term and an error
-	AppendEntries(ctx context.Context, peer Peer, req AppendEntriesRequest) (bool, int, error)
-	// RequestVote communicates with a peer requesting a vote and returns the peer's term, if the vote was granted and an error
-	RequestVote(ctx context.Context, peer Peer, req RequestVoteRequest) (int, bool, error)
-	// Close closes all open connections with clients
-	Close() error
-}
-
-type grpcClient struct {
+type GRPCClient struct {
 	peers map[int]*grpcPeer
 }
 
@@ -29,14 +21,15 @@ type grpcPeer struct {
 	client *proto.RaftClient
 }
 
-func NewGRPCClient(peers []*Peer) (*grpcClient, error) {
-	c := grpcClient{
+func NewGRPCClient(peers []*Peer) (*GRPCClient, error) {
+	c := GRPCClient{
 		map[int]*grpcPeer{},
 	}
 	for _, peer := range peers {
 		gp := grpcPeer{}
 		conn, err := grpc.NewClient(peer.address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
+			log.Printf("failed to connect to peer id=%d address=%s: %v", peer.ID(), peer.Address(), err)
 			return nil, fmt.Errorf("failed to connect to peer, id: %d, address: %s, error: %w", peer.ID(), peer.Address(), err)
 		}
 		rc := proto.NewRaftClient(conn)
@@ -73,7 +66,7 @@ type RequestVoteResponse struct {
 	VoteGranted bool `json:"voteGranted"`
 }
 
-func (g *grpcClient) AppendEntries(ctx context.Context, peer Peer, req AppendEntriesRequest) (bool, int, error) {
+func (g *GRPCClient) AppendEntries(ctx context.Context, peer Peer, req AppendEntriesRequest) (bool, int, int, error) {
 	rar := proto.AppendEntriesRequest{
 		Term:         int32(req.Term),
 		LeaderID:     int32(req.LeaderID),
@@ -94,19 +87,20 @@ func (g *grpcClient) AppendEntries(ctx context.Context, peer Peer, req AppendEnt
 
 	client := g.peers[peer.ID()].client
 	if client == nil {
-		return false, -1, fmt.Errorf("client not found for peer id: %d", peer.ID())
+		return false, -1, -1, fmt.Errorf("client not found for peer id: %d", peer.ID())
 	}
 	r, err := (*client).AppendEntries(ctx, &rar)
 	if err != nil {
-		return false, -1, fmt.Errorf("failed to send append entries: %w", err)
+		log.Printf("append entries rpc failed for peer id=%d: %v", peer.ID(), err)
+		return false, -1, -1, fmt.Errorf("failed to send append entries: %w", err)
 	}
 	if r == nil {
-		return false, -1, errors.New("nil response from append entries")
+		return false, -1, -1, errors.New("nil response from append entries")
 	}
-	return r.Success, int(r.Term), nil
+	return r.Success, int(r.Term), int(r.LastIndex), nil
 }
 
-func (g *grpcClient) RequestVote(ctx context.Context, peer Peer, req RequestVoteRequest) (int, bool, error) {
+func (g *GRPCClient) RequestVote(ctx context.Context, peer Peer, req RequestVoteRequest) (int, bool, error) {
 	rvr := proto.RequestVoteRequest{
 		Term:         int32(req.Term),
 		CandidateID:  int32(req.CandidateID),
@@ -132,7 +126,7 @@ func (g *grpcClient) RequestVote(ctx context.Context, peer Peer, req RequestVote
 	return int(res.Term), res.VoteGranted, nil
 }
 
-func (g *grpcClient) Close() error {
+func (g *GRPCClient) Close() error {
 	for _, peer := range g.peers {
 		if err := peer.conn.Close(); err != nil {
 			return err

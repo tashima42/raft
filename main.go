@@ -83,7 +83,7 @@ func run(version string) error {
 	sendRaftLogsChan := make(chan raft.LogEntry)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	r, err := raft.NewRaft(ctx, cancel, logger, db, grpcClient, serverConfig.ServerID, peers, serverConfig.InitializationCooldownSeconds, sendRaftLogsChan)
+	r, err := raft.NewRaft(ctx, cancel, logger, db, *grpcClient, serverConfig.ServerID, peers, serverConfig.InitializationCooldownSeconds, sendRaftLogsChan)
 	if err != nil {
 		return fmt.Errorf("failed to start raft: %w", err)
 	}
