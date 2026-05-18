@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	minimumElectionTimeoutMS int64 = 300
+	minimumElectionTimeoutMS int64 = 900
 	maximumElectionTimeoutMS int64 = 5 * minimumElectionTimeoutMS
 )
 
