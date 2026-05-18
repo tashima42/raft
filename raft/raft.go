@@ -341,18 +341,19 @@ func (r *Raft) addToLog(entry []byte) error {
 	return nil
 }
 
-// func (r *Raft) setNextIndexOnPeers() error {
-// 	lastLogIndex, err := r.lastLogIndex()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	for _, peer := range r.peers {
-// 		r.mu.Lock()
-// 		peer.SetNextIndex(lastLogIndex + 1)
-// 		r.mu.Unlock()
-// 	}
-// 	return nil
-// }
+func (r *Raft) setNextIndexOnPeers() error {
+	leaderCommit, err := r.leaderCommit()
+	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get leader commit while setting next index on peers: "+err.Error())
+		return err
+	}
+	for _, peer := range r.peers {
+		r.mu.Lock()
+		peer.SetNextIndex(leaderCommit + 1)
+		r.mu.Unlock()
+	}
+	return nil
+}
 
 // Run starts the main loop and goroutines for the server.
 // It calles the candidate state function and leader state function
@@ -366,7 +367,11 @@ func (r *Raft) Run() {
 	}
 
 	r.logger.InfoContext(r.ctx, "setting next index on peers")
-	// r.setNextIndexOnPeers()
+	if err := r.setNextIndexOnPeers(); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to set next index on peers: "+err.Error())
+		r.cancel()
+		return
+	}
 
 	for {
 		select {
@@ -521,18 +526,8 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 			defer wg.Done()
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("sending append entries request to peer: %d: %s", peer.ID(), peer.Address()))
 
-			// peerNextIndex := peer.NextIndex()
-
-			// if len(entries) == 0 {
-			// 	if peerNextIndex != r.lastApplied {
-			// 		sendLog, err := r.db.GetLog(peerNextIndex)
-			// 		if err != nil {
-			// 			r.logger.ErrorContext(r.ctx, "failed to get peer next index: "+err.Error())
-			// 			return
-			// 		}
-			// 		entries = []database.LogEntry{{Term: currentTerm, Index: sendLog.Index, Entry: sendLog.Entry}}
-			// 	}
-			// }
+			peerNextIndex := peer.NextIndex()
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d next index: %d", peer.ID(), peerNextIndex))
 
 			appendEntriesReq := AppendEntriesRequest{
 				Term:         currentTerm,
@@ -542,10 +537,48 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 				Entries:      entries,
 				LeaderCommit: leaderCommit,
 			}
+
+			if len(entries) > 0 {
+				firstEntry := entries[0]
+				appendEntriesReq.PrevLogIndex = firstEntry.Index - 1
+				if appendEntriesReq.PrevLogIndex >= 0 {
+					prevLog, err := r.db.GetLog(appendEntriesReq.PrevLogIndex)
+					if err != nil {
+						r.logger.ErrorContext(r.ctx, "failed to load previous log for append entries request: "+err.Error())
+						return
+					}
+					appendEntriesReq.PrevLogTerm = prevLog.Term
+				} else {
+					appendEntriesReq.PrevLogTerm = 0
+				}
+			}
+
+			if len(entries) == 0 && peerNextIndex >= 0 {
+				if peerNextIndex <= leaderCommit {
+					sendLog, err := r.db.GetLog(peerNextIndex)
+					if err != nil {
+						r.logger.ErrorContext(r.ctx, "failed to get peer next index log: "+err.Error())
+						return
+					}
+					appendEntriesReq.PrevLogIndex = sendLog.Index - 1
+					if appendEntriesReq.PrevLogIndex >= 0 {
+						prevLog, err := r.db.GetLog(appendEntriesReq.PrevLogIndex)
+						if err != nil {
+							r.logger.ErrorContext(r.ctx, "failed to get previous log for peer next index: "+err.Error())
+							return
+						}
+						appendEntriesReq.PrevLogTerm = prevLog.Term
+					} else {
+						appendEntriesReq.PrevLogTerm = 0
+					}
+					appendEntriesReq.Entries = []database.LogEntry{{Term: sendLog.Term, Index: sendLog.Index, Entry: sendLog.Entry}}
+				}
+			}
+
 			r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries request: %+v", appendEntriesReq))
 			tCtx, tCancel := context.WithTimeout(r.ctx, time.Second*1)
 			defer tCancel()
-			success, term, err := r.Client.AppendEntries(tCtx, *peer, appendEntriesReq)
+			success, term, peerLastIndex, err := r.Client.AppendEntries(tCtx, *peer, appendEntriesReq)
 			if err != nil {
 				r.logger.ErrorContext(r.ctx, "failed to send append entries request to peer: "+err.Error())
 				success = false
@@ -569,10 +602,17 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 				r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false", peer.ID()))
 				// TODO: implement retries
 
-				// decrement the next index to replicate missing logs
-				// peer.SetNextIndex(peer.NextIndex() - 1)
+				nextIndex := peerLastIndex + 1
+				if nextIndex < 0 {
+					nextIndex = 0
+				}
+				peer.SetNextIndex(nextIndex)
 
 				return
+			}
+			if len(appendEntriesReq.Entries) > 0 {
+				lastSent := appendEntriesReq.Entries[len(appendEntriesReq.Entries)-1].Index
+				peer.SetNextIndex(lastSent + 1)
 			}
 			psMu.Lock()
 			peerSuccess[peer.ID()] = true
@@ -605,8 +645,13 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 				r.logger.ErrorContext(r.ctx, "failed to set last log term after quorum append: "+err.Error())
 				return fmt.Errorf("failed to set previous log term: %w", err)
 			}
-			if err := r.setLeaderCommit(lastEntry.Index); err != nil {
+			leaderCommit = lastEntry.Index
+			if err := r.setLeaderCommit(leaderCommit); err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to set leader commit after quorum append: "+err.Error())
 				return fmt.Errorf("failed to set leader commit: %w", err)
+			}
+			if err := r.setNextIndexOnPeers(); err != nil {
+				return err
 			}
 		}
 	}

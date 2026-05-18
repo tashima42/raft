@@ -1,24 +1,33 @@
 package raft
 
 import (
+	"bytes"
 	"fmt"
+
+	"github.com/tashima42/raft/database"
 )
 
 // AppendEntries receives entries from the leader and checks if they are valid
 // and returns a bool for success or error, the current term and an error
-func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
+func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, int, error) {
 	// reset election timeout and prevent server from starting new elections
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("received append entries request: %+v", req))
 
 	currentTerm, err := r.currentTerm()
 	if err != nil {
-		return false, currentTerm, fmt.Errorf("rpc - failed to get current term: %w", err)
+		r.logger.ErrorContext(r.ctx, "append entries - failed to get current term: "+err.Error())
+		return false, -1, -1, fmt.Errorf("rpc - failed to get current term: %w", err)
+	}
+	lastIndex, err := r.lastLogIndex()
+	if err != nil {
+		r.logger.ErrorContext(r.ctx, "append entries - failed to get current term: "+err.Error())
+		return false, -1, -1, fmt.Errorf("rpc - failed to get last log index: %w", err)
 	}
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
 	// (§5.1)
 	if req.Term < currentTerm {
 		r.logger.InfoContext(r.ctx, "request term is smaller than current term, replying false")
-		return false, currentTerm, nil
+		return false, currentTerm, lastIndex, nil
 	}
 	r.logger.InfoContext(r.ctx, "request term is valid for append entries")
 
@@ -26,21 +35,17 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	if currentTerm != req.Term {
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting current term to %d", req.Term))
 		if err := r.setCurrentTerm(req.Term); err != nil {
-			return false, currentTerm, fmt.Errorf("failed to set current term: %w", err)
+			r.logger.ErrorContext(r.ctx, "append entries - failed to set current term: "+err.Error())
+			return false, currentTerm, lastIndex, fmt.Errorf("failed to set current term: %w", err)
 		}
 		if err := r.setVotedFor(-1); err != nil {
-			return false, currentTerm, fmt.Errorf("failed to set voted for: %w", err)
+			r.logger.ErrorContext(r.ctx, "append entries - failed to reset voted for: "+err.Error())
+			return false, currentTerm, lastIndex, fmt.Errorf("failed to set voted for: %w", err)
 		}
 		currentTerm = req.Term
 	}
-
-	// if req.PrevLogIndex
-	lastLogTerm, err := r.lastLogTerm()
-	if err != nil {
-		return false, currentTerm, fmt.Errorf("failed to get previous log term: %w", err)
-	}
-	if lastLogTerm != req.PrevLogTerm {
-		return false, currentTerm, nil
+	if currentTerm == req.Term {
+		r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries term aligned with current term: %d", currentTerm))
 	}
 
 	r.logger.InfoContext(r.ctx, "appending entries to log")
@@ -54,15 +59,62 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("last log index is: %d", lastLogIndex))
 	if req.PrevLogIndex > lastLogIndex {
 		r.logger.InfoContext(r.ctx, "previous log index from request is bigger than current last log index, replying false")
-		return false, currentTerm, nil
+		return false, currentTerm, lastIndex, nil
+	}
+	if req.PrevLogIndex >= 0 {
+		prevLog, err := r.db.GetLog(req.PrevLogIndex)
+		if err != nil {
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("previous log index %d missing on follower, replying false", req.PrevLogIndex))
+			return false, currentTerm, lastIndex, nil
+		}
+		if prevLog.Term != req.PrevLogTerm {
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("previous log term mismatch, replying false: local=%d request=%d index=%d", prevLog.Term, req.PrevLogTerm, req.PrevLogIndex))
+			return false, currentTerm, lastIndex, nil
+		}
+		r.logger.InfoContext(r.ctx, "previous log term matches request at previous log index")
+	} else {
+		r.logger.InfoContext(r.ctx, "request indicates no previous log entry (prev index < 0)")
+	}
+	r.logger.InfoContext(r.ctx, "previous log index is valid for append")
+
+	entriesToAppend := make([]database.LogEntry, 0, len(req.Entries))
+	for i, incoming := range req.Entries {
+		if incoming.Index <= lastLogIndex {
+			existing, getErr := r.db.GetLog(incoming.Index)
+			if getErr != nil {
+				r.logger.ErrorContext(r.ctx, "append entries - failed to load existing log while deduplicating: "+getErr.Error())
+				return false, currentTerm, lastIndex, fmt.Errorf("failed to read existing log at index %d: %w", incoming.Index, getErr)
+			}
+
+			if existing.Term == incoming.Term && bytes.Equal(existing.Entry, incoming.Entry) {
+				r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries - skipping duplicate log index=%d term=%d", incoming.Index, incoming.Term))
+				continue
+			}
+
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries - conflict detected at index=%d, deleting follower tail and replacing", incoming.Index))
+			if err := r.deleteLogsFromIndex(incoming.Index - 1); err != nil {
+				r.logger.ErrorContext(r.ctx, "append entries - failed to delete conflicting follower tail: "+err.Error())
+				return false, currentTerm, lastIndex, fmt.Errorf("failed to delete conflicting logs from index %d: %w", incoming.Index, err)
+			}
+
+			entriesToAppend = append(entriesToAppend, req.Entries[i:]...)
+			break
+		}
+
+		entriesToAppend = append(entriesToAppend, incoming)
 	}
 
-	if err := r.appendLogs(req.Entries); err != nil {
-		return false, currentTerm, fmt.Errorf("failed to append logs: %w", err)
+	if len(entriesToAppend) > 0 {
+		if err := r.appendLogs(entriesToAppend); err != nil {
+			r.logger.ErrorContext(r.ctx, "append entries - failed to append logs: "+err.Error())
+			return false, currentTerm, lastIndex, fmt.Errorf("failed to append logs: %w", err)
+		}
+	} else {
+		r.logger.InfoContext(r.ctx, "append entries - all incoming entries are duplicates, no storage append required")
 	}
 
 	r.logger.InfoContext(r.ctx, "ranging through request entries")
-	for _, entry := range req.Entries {
+	for _, entry := range entriesToAppend {
 		r.logger.InfoContext(r.ctx, "executing log on keyvalue state machine")
 		if err := r.sendLogToClient(entry.Entry); err != nil {
 			r.logger.ErrorContext(r.ctx, "append entries - failed to execute log on client: "+err.Error())
@@ -95,7 +147,7 @@ func (r *Raft) AppendEntries(req AppendEntriesRequest) (bool, int, error) {
 
 	r.resetElectionTimeout()
 	r.logger.InfoContext(r.ctx, "replying true")
-	return true, currentTerm, nil
+	return true, currentTerm, lastIndex, nil
 }
 
 func (r *Raft) RequestVote(req RequestVoteRequest) (int, bool, error) {
