@@ -109,7 +109,7 @@ func (d *SQLite) AppendLogs(logs []LogEntry) (err error) {
 		return err
 	}
 
-	for i, log := range logs {
+	for i, entry := range logs {
 		if i != 0 {
 			if _, err := sb.WriteString(","); err != nil {
 				return err
@@ -119,7 +119,7 @@ func (d *SQLite) AppendLogs(logs []LogEntry) (err error) {
 			return err
 		}
 
-		args = append(args, log.Term, log.Entry, log.Index)
+		args = append(args, entry.Term, entry.Entry, entry.Index)
 	}
 	stmt, err := d.db.Prepare(sb.String())
 	if err != nil {
@@ -153,12 +153,12 @@ func (d *SQLite) GetLogs() (logs []LogEntry, err error) {
 	}
 
 	for rows.Next() {
-		log := LogEntry{}
-		err = rows.Scan(&log.Term, &log.Entry, &log.Index)
+		entry := LogEntry{}
+		err = rows.Scan(&entry.Term, &entry.Entry, &entry.Index)
 		if err != nil {
 			return nil, err
 		}
-		logs = append(logs, log)
+		logs = append(logs, entry)
 	}
 
 	if err := rows.Err(); err != nil {
