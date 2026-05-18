@@ -71,6 +71,7 @@ func (r *Raft) requestVotes() error {
 	r.logger.InfoContext(r.ctx, "requesting votes, locking mutex")
 	currentTerm, err := r.currentTerm()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "request votes - failed to get current term: "+err.Error())
 		return err
 	}
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("current term: %d", currentTerm))
@@ -136,6 +137,7 @@ func (r *Raft) requestVotes() error {
 
 	wonElection, err := r.countVotes()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "request votes - failed to count votes: "+err.Error())
 		return err
 	}
 	r.logger.InfoContext(r.ctx, fmt.Sprintf("voting results: %t", wonElection))
@@ -154,6 +156,7 @@ func (r *Raft) countVotes() (bool, error) {
 	totalVotes := 1
 	votedFor, err := r.votedFor()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "count votes - failed to get voted for: "+err.Error())
 		return false, err
 	}
 	// convert to follower
@@ -164,6 +167,7 @@ func (r *Raft) countVotes() (bool, error) {
 		r.State = StateFollower
 		r.mu.Unlock()
 		if err := r.setVotedFor(-1); err != nil {
+			r.logger.ErrorContext(r.ctx, "count votes - failed to reset voted for while stepping down: "+err.Error())
 			return false, err
 		}
 		return false, nil
@@ -224,6 +228,7 @@ func (r *Raft) candidateState() error {
 			}
 			r.logger.InfoContext(r.ctx, "voting for itself")
 			if err := r.setVotedFor(r.id); err != nil {
+				r.logger.ErrorContext(r.ctx, "candidate - failed to vote for self: "+err.Error())
 				r.mu.Unlock()
 				return fmt.Errorf("failed to vote for self: %w", err)
 			}

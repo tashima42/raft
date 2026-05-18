@@ -28,6 +28,11 @@ func LeaderRedirectInterceptor(r leaderChecker) grpc.UnaryServerInterceptor {
 
 		leaderAddr, err := r.LeaderKVAddress()
 		if err != nil || leaderAddr == "" {
+			if err != nil {
+				log.Printf("leader redirect failed to resolve leader address: %v", err)
+			} else {
+				log.Printf("leader redirect failed: leader address is empty")
+			}
 			return nil, status.Error(codes.Unavailable, "not the leader and leader address is unknown")
 		}
 

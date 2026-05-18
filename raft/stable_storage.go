@@ -18,6 +18,7 @@ const (
 func (r *Raft) currentTerm() (int, error) {
 	value, err := r.db.GetRaftValue(currentTermKey)
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "stable storage - failed to read current term: "+err.Error())
 		return -1, err
 	}
 
@@ -33,6 +34,7 @@ func (r *Raft) setCurrentTerm(term int) error {
 func (r *Raft) votedFor() (int, error) {
 	value, err := r.db.GetRaftValue(votedForKey)
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "stable storage - failed to read voted for: "+err.Error())
 		return -1, err
 	}
 
@@ -62,6 +64,7 @@ func (r *Raft) setLastLogIndex(idx int) error {
 func (r *Raft) lastLogIndex() (int, error) {
 	value, err := r.db.GetRaftValue(lastLogIndexKey)
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "stable storage - failed to read last log index: "+err.Error())
 		return -1, err
 	}
 
@@ -75,6 +78,7 @@ func (r *Raft) setLeaderID(leaderID int) error {
 func (r *Raft) leaderID() (int, error) {
 	leaderIDStr, err := r.db.GetRaftValue(leaderIDKey)
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "stable storage - failed to read leader id: "+err.Error())
 		return -1, err
 	}
 	return strconv.Atoi(leaderIDStr)
@@ -100,6 +104,7 @@ func (r *Raft) setLastLogTerm(term int) error {
 func (r *Raft) lastLogTerm() (int, error) {
 	value, err := r.db.GetRaftValue(lastLogTermKey)
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "stable storage - failed to read last log term: "+err.Error())
 		return -1, err
 	}
 
@@ -113,6 +118,7 @@ func (r *Raft) setLeaderCommit(commitIDX int) error {
 func (r *Raft) leaderCommit() (int, error) {
 	value, err := r.db.GetRaftValue(leaderCommitKey)
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "stable storage - failed to read leader commit: "+err.Error())
 		return -1, err
 	}
 

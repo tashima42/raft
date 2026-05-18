@@ -63,6 +63,7 @@ func (k *KeyVal) SendLogToRaft(p Pack) error {
 	k.logger.InfoContext(k.ctx, "sending log to raft")
 	b, err := json.Marshal(p)
 	if err != nil {
+		k.logger.ErrorContext(k.ctx, "failed to marshal key-value operation: "+err.Error())
 		return err
 	}
 

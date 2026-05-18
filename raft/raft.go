@@ -94,10 +94,12 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 	raft.logger.InfoContext(ctx, "checking if there is a current term")
 	if _, err := raft.currentTerm(); err != nil {
 		if err != sql.ErrNoRows {
+			raft.logger.ErrorContext(ctx, "failed to read current term during initialization: "+err.Error())
 			return nil, fmt.Errorf("new - failed to get current term: %w", err)
 		}
 		raft.logger.InfoContext(ctx, "setting current term to 0")
 		if err := raft.setCurrentTerm(0); err != nil {
+			raft.logger.ErrorContext(ctx, "failed to initialize current term to 0: "+err.Error())
 			return nil, err
 		}
 	}
@@ -105,10 +107,12 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 	raft.logger.InfoContext(ctx, "checking if there is voted for")
 	if _, err := raft.votedFor(); err != nil {
 		if err != sql.ErrNoRows {
+			raft.logger.ErrorContext(ctx, "failed to read voted for during initialization: "+err.Error())
 			return nil, fmt.Errorf("failed to get voted for: %w", err)
 		}
 		raft.logger.InfoContext(ctx, "setting voted for to invalid value -1")
 		if err := raft.setVotedFor(-1); err != nil {
+			raft.logger.ErrorContext(ctx, "failed to initialize voted for to -1: "+err.Error())
 			return nil, err
 		}
 	}
@@ -118,6 +122,7 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 		// if there is no prev log index, set to 0 to indicate that there are no logs
 		// and prevent the no rows error from being returned when trying to get the prev log index later on
 		if err != sql.ErrNoRows {
+			raft.logger.ErrorContext(ctx, "failed to read last log index during initialization: "+err.Error())
 			return nil, fmt.Errorf("failed to get previous log index: %w", err)
 		}
 		if err := raft.setLastLogIndex(0); err != nil {
@@ -130,9 +135,11 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 		// if there is no prev log term, set to 0 to indicate that there are no logs
 		// and prevent the no rows error from being returned when trying to get the prev log term later on
 		if err != sql.ErrNoRows {
+			raft.logger.ErrorContext(ctx, "failed to read last log term during initialization: "+err.Error())
 			return nil, fmt.Errorf("failed to get previous log term: %w", err)
 		}
 		if err := raft.setLastLogTerm(0); err != nil {
+			raft.logger.ErrorContext(ctx, "failed to initialize last log term to 0: "+err.Error())
 			return nil, fmt.Errorf("failed to set previous log term: %w", err)
 		}
 	}
@@ -140,9 +147,11 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 	raft.logger.InfoContext(ctx, "checking if there is a leaderCommit")
 	if _, err := raft.leaderCommit(); err != nil {
 		if err != sql.ErrNoRows {
+			raft.logger.ErrorContext(ctx, "failed to read leader commit during initialization: "+err.Error())
 			return nil, fmt.Errorf("failed to get leader commit: %w", err)
 		}
 		if err := raft.setLeaderCommit(0); err != nil {
+			raft.logger.ErrorContext(ctx, "failed to initialize leader commit to 0: "+err.Error())
 			return nil, fmt.Errorf("failed to set leader commit: %w", err)
 		}
 	}
@@ -150,9 +159,11 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 	raft.logger.InfoContext(ctx, "checking if there is a leaderID")
 	if _, err := raft.leaderID(); err != nil {
 		if err != sql.ErrNoRows {
+			raft.logger.ErrorContext(ctx, "failed to read leader id during initialization: "+err.Error())
 			return nil, fmt.Errorf("failed to get leader id: %w", err)
 		}
 		if err := raft.setLeaderID(-1); err != nil {
+			raft.logger.ErrorContext(ctx, "failed to initialize leader id to -1: "+err.Error())
 			return nil, fmt.Errorf("failed to set leader id: %w", err)
 		}
 	}
@@ -168,6 +179,7 @@ func (r *Raft) GracefullyShutDown() error {
 	r.cancel()
 	r.logger.InfoContext(r.ctx, "gracefully shutting down and closing database")
 	if err := r.Client.Close(); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to close raft client: "+err.Error())
 		return err
 	}
 	return r.db.Close()
@@ -182,17 +194,20 @@ func (r *Raft) initLog() error {
 	defer r.mu.Unlock()
 	logs, err := r.logs()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get logs from storage: "+err.Error())
 		return fmt.Errorf("failed to get logs: %w", err)
 	}
 	r.logger.InfoContext(r.ctx, "ranging through logs")
 	for _, log := range logs {
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting term to: %d", log.Term))
 		if err := r.setCurrentTerm(log.Term); err != nil {
+			r.logger.ErrorContext(r.ctx, "failed to set current term while initializing log: "+err.Error())
 			return fmt.Errorf("failed to set current term: %w", err)
 		}
 
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("applying log index: %d, term: %d", log.Index, log.Term))
 		if err := r.sendLogToClient(log.Entry); err != nil {
+			r.logger.ErrorContext(r.ctx, "failed to apply log to key-value client: "+err.Error())
 			return fmt.Errorf("failed to send log to client: %w", err)
 		}
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting last applied to: %d", log.Index))
@@ -234,6 +249,7 @@ func (r *Raft) IsLeader() bool {
 func (r *Raft) LeaderKVAddress() (string, error) {
 	leaderID, err := r.leaderID()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to load leader id for kv address: "+err.Error())
 		return "", fmt.Errorf("failed to get leader id: %w", err)
 	}
 	var leader *Peer
@@ -253,6 +269,7 @@ func (r *Raft) LeaderKVAddress() (string, error) {
 func (r *Raft) LeaderAPIAddress() (string, error) {
 	leaderID, err := r.leaderID()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to load leader id for api address: "+err.Error())
 		return "", fmt.Errorf("failed to get leader id: %w", err)
 	}
 	var leader *Peer
@@ -272,14 +289,17 @@ func (r *Raft) LeaderAPIAddress() (string, error) {
 func (r *Raft) addToLog(entry []byte) error {
 	prevLogIndex, err := r.lastLogIndex()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get last log index before appending entry: "+err.Error())
 		return fmt.Errorf("failed to get previous log index: %w", err)
 	}
 	term, err := r.currentTerm()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get current term before appending entry: "+err.Error())
 		return fmt.Errorf("add to log - failed to get current term: %w", err)
 	}
 	dbEntry := database.LogEntry{Index: prevLogIndex + 1, Term: term, Entry: entry}
 	if err := r.appendLogs([]database.LogEntry{dbEntry}); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to append log to storage: "+err.Error())
 		return fmt.Errorf("failed to append log: %w", err)
 	}
 	if err := r.sendAppendEntries([]database.LogEntry{dbEntry}, true); err != nil {
@@ -287,19 +307,24 @@ func (r *Raft) addToLog(entry []byte) error {
 			// entry
 			r.logger.InfoContext(r.ctx, "quorum not reached for log entry, removing log entry and returning error")
 			if err := r.deleteLogsFromIndex(prevLogIndex + 1); err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to rollback log after quorum failure: "+err.Error())
 				return fmt.Errorf("failed to delete log entry after quorum not reached: %w", err)
 			}
 		}
+		r.logger.ErrorContext(r.ctx, "failed to replicate append entries to peers: "+err.Error())
 		return fmt.Errorf("failed to send append entries: %w", err)
 	}
 	if err := r.sendLogToClient(entry); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to apply committed log to client: "+err.Error())
 		return fmt.Errorf("failed to send log to client: %w", err)
 	}
 
 	if err := r.setLastLogIndex(prevLogIndex + 1); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to update last log index after append: "+err.Error())
 		return fmt.Errorf("failed to set previous log index: %w", err)
 	}
 	if err := r.setLeaderCommit(prevLogIndex + 1); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to update leader commit after append: "+err.Error())
 		return fmt.Errorf("failed to set leader commit: %w", err)
 	}
 	return nil
@@ -389,6 +414,7 @@ func (r *Raft) listenForEntries() {
 			return
 		case entry := <-r.receiveLogsChan:
 			if err := r.addToLog(entry.Entry); err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to append received client log entry: "+err.Error())
 				entry.ErrChan <- err
 				break
 			}
@@ -449,18 +475,22 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 
 	currentTerm, err := r.currentTerm()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get current term before append entries broadcast: "+err.Error())
 		return fmt.Errorf("send ape - failed to get current term: %w", err)
 	}
 	prevLogIndex, err := r.lastLogIndex()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get last log index before append entries broadcast: "+err.Error())
 		return fmt.Errorf("failed to get previous log index: %w", err)
 	}
 	lastLogTerm, err := r.lastLogTerm()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get last log term before append entries broadcast: "+err.Error())
 		return fmt.Errorf("failed to get previous log term: %w", err)
 	}
 	leaderCommit, err := r.leaderCommit()
 	if err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to get leader commit before append entries broadcast: "+err.Error())
 		return fmt.Errorf("failed to get leader commit: %w", err)
 	}
 
@@ -523,9 +553,9 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 
 				return
 			}
-			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with success: %t and term: %d", peer.ID(), success, term))
+			r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d responded with: %t and term: %d", peer.ID(), success, term))
 			if !success {
-				r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false for success", peer.ID()))
+				r.logger.InfoContext(r.ctx, fmt.Sprintf("peer %d returned false", peer.ID()))
 				// TODO: implement retries
 
 				// decrement the next index to replicate missing logs
@@ -551,14 +581,17 @@ func (r *Raft) sendAppendEntries(entries []database.LogEntry, checkQuorum bool) 
 		}
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("append entries success count: %d, quorum needed: %d", successCount, quorum))
 		if successCount < quorum {
+			r.logger.ErrorContext(r.ctx, fmt.Sprintf("quorum not reached for append entries: success_count=%d quorum=%d", successCount, quorum))
 			return ErrQuorumNotReached
 		}
 		if len(entries) > 0 {
 			lastEntry := entries[len(entries)-1]
 			if err := r.setLastLogIndex(lastEntry.Index); err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to set last log index after quorum append: "+err.Error())
 				return fmt.Errorf("failed to set previous log index: %w", err)
 			}
 			if err := r.setLastLogTerm(lastEntry.Term); err != nil {
+				r.logger.ErrorContext(r.ctx, "failed to set last log term after quorum append: "+err.Error())
 				return fmt.Errorf("failed to set previous log term: %w", err)
 			}
 			if err := r.setLeaderCommit(lastEntry.Index); err != nil {

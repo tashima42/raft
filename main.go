@@ -129,11 +129,13 @@ func run(version string) error {
 
 	select {
 	case err := <-errChan:
+		logger.ErrorContext(ctx, "grpc server failed", slog.String("error", err.Error()))
 		return err
 	case <-ctx.Done():
 		logger.InfoContext(ctx, "shutting down server")
 
 		if err := r.GracefullyShutDown(); err != nil {
+			logger.ErrorContext(ctx, "failed to gracefully shutdown raft", slog.String("error", err.Error()))
 			return fmt.Errorf("failed to gracefully shutdown raft: %w", err)
 		}
 
@@ -193,6 +195,7 @@ func parseFlags() (ServerConfig, error) {
 	for i, pid := range pis {
 		id, err := strconv.Atoi(pid)
 		if err != nil {
+			log.Printf("failed to parse peer id %q: %v", pid, err)
 			return ServerConfig{}, err
 		}
 		ids[i] = id
