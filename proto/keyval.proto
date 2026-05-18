@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+option go_package = "github.com/tashima42/raft/proto";
+
+package proto;
+
+service KeyVal {
+  rpc Set (Pack) returns (Pack) {}
+  rpc Get (GetRequest) returns (Pack) {}
+}
+
+message Pack {
+  string key = 1;
+  string value = 2;
+}
+
+message GetRequest {
+  string key = 1;
+}

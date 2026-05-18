@@ -1,0 +1,9 @@
+tmp/
+.env
+dist/
+*.gob
+*.json
+*.db
+*.db-journal
+*.log
+codebase.md
