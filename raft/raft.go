@@ -181,7 +181,11 @@ func (r *Raft) GracefullyShutDown() error {
 		r.logger.ErrorContext(r.ctx, "failed to close raft client: "+err.Error())
 		return err
 	}
-	return r.db.Close()
+	if err := r.db.Close(); err != nil {
+		r.logger.ErrorContext(r.ctx, "failed to close raft database: "+err.Error())
+		return err
+	}
+	return nil
 }
 
 // initLog gets all logs from stable storage and applies them
