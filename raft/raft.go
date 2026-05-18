@@ -213,8 +213,16 @@ func (r *Raft) initLog() error {
 			r.logger.ErrorContext(r.ctx, "failed to apply log to key-value client: "+err.Error())
 			return fmt.Errorf("failed to send log to client: %w", err)
 		}
+		if err := r.setLastLogIndex(log.Index); err != nil {
+			r.logger.ErrorContext(r.ctx, "failed to set last log index: "+err.Error())
+		}
+		if err := r.setLastLogTerm(log.Term); err != nil {
+			r.logger.ErrorContext(r.ctx, "failed to set last log term: "+err.Error())
+		}
+		if err := r.setLeaderCommit(log.Index); err != nil {
+			r.logger.ErrorContext(r.ctx, "failed to set leader commit: "+err.Error())
+		}
 		r.logger.InfoContext(r.ctx, fmt.Sprintf("setting last applied to: %d", log.Index))
-		r.lastApplied = log.Index
 	}
 	return nil
 }
