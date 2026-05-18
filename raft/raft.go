@@ -123,7 +123,8 @@ func NewRaft(ctx context.Context, cancel context.CancelFunc, logger *slog.Logger
 			raft.logger.ErrorContext(ctx, "failed to read last log index during initialization: "+err.Error())
 			return nil, fmt.Errorf("failed to get previous log index: %w", err)
 		}
-		if err := raft.setLastLogIndex(0); err != nil {
+		if err := raft.setLastLogIndex(-1); err != nil {
+			raft.logger.ErrorContext(ctx, "failed to initialize last log index to 0: "+err.Error())
 			return nil, fmt.Errorf("failed to set previous log index: %w", err)
 		}
 	}
